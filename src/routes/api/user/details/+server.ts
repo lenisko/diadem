@@ -23,7 +23,8 @@ export async function GET(event) {
 				displayName: user.displayName || user.username || "",
 				avatarUrl: user.avatarUrl ?? ""
 			},
-			permissions: user.permissions
+			permissions: user.permissions,
+			isHeaderAuth: true
 		} as UserData);
 	}
 
