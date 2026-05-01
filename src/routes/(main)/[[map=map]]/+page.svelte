@@ -86,7 +86,7 @@
 			class:items-start={isUiLeft()}
 		>
 			<WeatherOverview floating />
-			<Fabs {map} />
+			<Fabs {map} topAnchored />
 		</div>
 	{:else}
 		<WeatherOverview />

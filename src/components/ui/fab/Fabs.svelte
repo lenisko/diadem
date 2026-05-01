@@ -15,10 +15,12 @@
 
 	let {
 		map,
-		showSearch = true
+		showSearch = true,
+		topAnchored = false
 	}: {
 		map: maplibre.Map | undefined;
 		showSearch?: boolean;
+		topAnchored?: boolean;
 	} = $props();
 
 	let isSearchAllowed = $derived(
@@ -53,15 +55,7 @@
 	<Search />
 {/if}
 
-<div class="mx-2 gap-2 flex-col flex items-center" hidden={!map} transition:fade={{ duration: 90 }}>
-	<LocateFab {map} />
-
-	{#if isSearchAllowed}
-		<BaseFab onclick={() => openSearchModal()}>
-			<SearchIcon size="24" />
-		</BaseFab>
-	{/if}
-
+{#snippet compassFab()}
 	{#if isMapSkewed()}
 		<div transition:slide={{ duration: 120 }}>
 			<BaseFab onclick={() => resetMap(map)} class="rounded-full!">
@@ -71,5 +65,25 @@
 				/>
 			</BaseFab>
 		</div>
+	{/if}
+{/snippet}
+
+{#snippet searchFab()}
+	{#if isSearchAllowed}
+		<BaseFab onclick={() => openSearchModal()}>
+			<SearchIcon size="24" />
+		</BaseFab>
+	{/if}
+{/snippet}
+
+<div class="mx-2 gap-2 flex-col flex items-center" hidden={!map} transition:fade={{ duration: 90 }}>
+	{#if topAnchored}
+		<LocateFab {map} />
+		{@render searchFab()}
+		{@render compassFab()}
+	{:else}
+		{@render compassFab()}
+		{@render searchFab()}
+		<LocateFab {map} />
 	{/if}
 </div>
