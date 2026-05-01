@@ -54,6 +54,14 @@
 {/if}
 
 <div class="mx-2 gap-2 flex-col flex items-center" hidden={!map} transition:fade={{ duration: 90 }}>
+	<LocateFab {map} />
+
+	{#if isSearchAllowed}
+		<BaseFab onclick={() => openSearchModal()}>
+			<SearchIcon size="24" />
+		</BaseFab>
+	{/if}
+
 	{#if isMapSkewed()}
 		<div transition:slide={{ duration: 120 }}>
 			<BaseFab onclick={() => resetMap(map)} class="rounded-full!">
@@ -64,12 +72,4 @@
 			</BaseFab>
 		</div>
 	{/if}
-
-	{#if isSearchAllowed}
-		<BaseFab onclick={() => openSearchModal()}>
-			<SearchIcon size="24" />
-		</BaseFab>
-	{/if}
-
-	<LocateFab {map} />
 </div>
