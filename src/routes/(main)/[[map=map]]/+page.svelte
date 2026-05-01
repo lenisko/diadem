@@ -82,7 +82,7 @@
 			{#if getOpenedMenu()}
 				<DesktopMenu />
 			{/if}
-			{#if !isSearchViewActive()}
+			{#if !isSearchViewActive() && !getOpenedMenu()}
 				<BottomNav />
 			{/if}
 		{/snippet}
@@ -100,7 +100,7 @@
 				{/if}
 				<PopupContainer />
 			{/if}
-			{#if !isSearchViewActive()}
+			{#if !isSearchViewActive() && !getOpenedMenu()}
 				<BottomNav />
 			{/if}
 		{/snippet}
