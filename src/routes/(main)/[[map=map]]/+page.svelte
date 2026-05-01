@@ -32,6 +32,8 @@
 	import ErrorPageWebGl from "@/components/ui/ErrorPageWebGl.svelte";
 	import MapMain from "@/components/map/MapMain.svelte";
 	import MapMenuUi from "@/components/ui/MapMenuUi.svelte";
+	import { getUserSettings } from "@/lib/services/userSettings.svelte";
+	import { isUiLeft } from "@/lib/utils/device";
 	import type maplibre from "maplibre-gl";
 	import { onDestroy, onMount } from "svelte";
 
@@ -75,7 +77,20 @@
 		</div>
 	{/if}
 
-	<WeatherOverview />
+	{#if getUserSettings().searchBelowWeather && !isSearchViewActive()}
+		<div
+			class="fixed top-2 z-10 flex flex-col gap-2 pointer-events-none"
+			class:right-2={!isUiLeft()}
+			class:left-2={isUiLeft()}
+			class:items-end={!isUiLeft()}
+			class:items-start={isUiLeft()}
+		>
+			<WeatherOverview floating />
+			<Fabs {map} />
+		</div>
+	{:else}
+		<WeatherOverview />
+	{/if}
 
 	<MapMenuUi>
 		{#snippet desktopLeft()}
@@ -87,7 +102,7 @@
 			{/if}
 		{/snippet}
 		{#snippet desktopRight()}
-			{#if !isSearchViewActive()}
+			{#if !isSearchViewActive() && !getUserSettings().searchBelowWeather}
 				<Fabs {map} />
 			{/if}
 			<PopupContainer />
@@ -95,7 +110,7 @@
 
 		{#snippet mobileBottom()}
 			{#if !getOpenedMenu()}
-				{#if !isSearchViewActive()}
+				{#if !isSearchViewActive() && !getUserSettings().searchBelowWeather}
 					<Fabs {map} />
 				{/if}
 				<PopupContainer />

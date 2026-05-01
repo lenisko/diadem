@@ -69,6 +69,7 @@ export type UserSettings = {
 		tappable: UiconSetUS;
 	};
 	isLeftHanded: boolean;
+	searchBelowWeather: boolean;
 	themeMode: "dark" | "light" | "system";
 	loadMapObjectsWhileMoving: boolean;
 	loadMapObjectsPadding: number;
@@ -133,6 +134,7 @@ export function getDefaultUserSettings(): UserSettings {
 			tappable: getDefaultIconSet(MapObjectType.TAPPABLE)
 		},
 		isLeftHanded: false,
+		searchBelowWeather: false,
 		themeMode: "system",
 		loadMapObjectsWhileMoving: false,
 		loadMapObjectsPadding: 20,

@@ -42,6 +42,14 @@
 		/>
 	{/if}
 
+	<Toggle
+		title={m.settings_search_below_weather_title()}
+		description={m.settings_search_below_weather_description()}
+		onclick={() =>
+			onSettingsChange("searchBelowWeather", !getUserSettings().searchBelowWeather)}
+		value={getUserSettings().searchBelowWeather}
+	/>
+
 	<MenuGeneric title={m.settings_theme()}>
 		<RadioGroup
 			value={mode.current}

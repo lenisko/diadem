@@ -26,6 +26,8 @@
 	import { isMenuSidebar, isUiLeft } from "@/lib/utils/device";
 	import { isSearchViewActive } from "@/lib/features/activeSearch.svelte";
 
+	let { floating = false }: { floating?: boolean } = $props();
+
 	let ignoreWatch = false;
 	let isClicked: boolean = $state(false);
 	let boostedTypes: number[] = $derived(
@@ -76,14 +78,8 @@
 	}
 </script>
 
-{#if getCurrentWeather() && isWeatherUpdated(getCurrentWeather()) && hasLoadedFeature(LoadedFeature.REMOTE_LOCALE, LoadedFeature.ICON_SETS) && !isSearchViewActive()}
-	<div
-		class="pointer-events-none fixed top-2 z-10"
-		class:right-2={!isUiLeft() || isMenuSidebar()}
-		class:left-2={isUiLeft() && !isMenuSidebar()}
-		transition:fade={{ duration: 90 }}
-	>
-		<Button
+{#snippet weatherButton()}
+	<Button
 			variant="ghost"
 			size=""
 			class="pointer-events-auto px-4 py-3 text-sm bg-card flex-col! items-start! border rounded-lg shadow-lg hover:bg-accent hover:text-accent-foreground active:bg-accent active:text-accent-foreground disabled:pointer-events-none"
@@ -120,5 +116,21 @@
 				</div>
 			{/if}
 		</Button>
-	</div>
+{/snippet}
+
+{#if getCurrentWeather() && isWeatherUpdated(getCurrentWeather()) && hasLoadedFeature(LoadedFeature.REMOTE_LOCALE, LoadedFeature.ICON_SETS) && !isSearchViewActive()}
+	{#if floating}
+		<div transition:fade={{ duration: 90 }}>
+			{@render weatherButton()}
+		</div>
+	{:else}
+		<div
+			class="pointer-events-none fixed top-2 z-10"
+			class:right-2={!isUiLeft() || isMenuSidebar()}
+			class:left-2={isUiLeft() && !isMenuSidebar()}
+			transition:fade={{ duration: 90 }}
+		>
+			{@render weatherButton()}
+		</div>
+	{/if}
 {/if}

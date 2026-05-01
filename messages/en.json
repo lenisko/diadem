@@ -511,4 +511,7 @@
 	"popup_action_hide_timer": "Hide timer",
 	"close": "Close"
 	"language_polish": "Polish"
+	"language_polish": "Polish",
+	"settings_search_below_weather_title": "Stack search under weather",
+	"settings_search_below_weather_description": "Place search and location buttons under the weather box"
 }
