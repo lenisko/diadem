@@ -34,6 +34,7 @@
 	import MapMenuUi from "@/components/ui/MapMenuUi.svelte";
 	import { getUserSettings } from "@/lib/services/userSettings.svelte";
 	import { isUiLeft } from "@/lib/utils/device";
+	import { isOpenModal } from "@/lib/ui/modal.svelte";
 	import type maplibre from "maplibre-gl";
 	import { onDestroy, onMount } from "svelte";
 
@@ -97,7 +98,7 @@
 			{#if getOpenedMenu()}
 				<DesktopMenu />
 			{/if}
-			{#if !isSearchViewActive() && !getOpenedMenu()}
+			{#if !isSearchViewActive() && !getOpenedMenu() && !isOpenModal("search")}
 				<BottomNav />
 			{/if}
 		{/snippet}
@@ -115,7 +116,7 @@
 				{/if}
 				<PopupContainer />
 			{/if}
-			{#if !isSearchViewActive() && !getOpenedMenu()}
+			{#if !isSearchViewActive() && !getOpenedMenu() && !isOpenModal("search")}
 				<BottomNav />
 			{/if}
 		{/snippet}
