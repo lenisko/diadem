@@ -76,7 +76,12 @@
 	{/if}
 {/snippet}
 
-<div class="mx-2 gap-2 flex-col flex items-center" hidden={!map} transition:fade={{ duration: 90 }}>
+<div
+	class="gap-2 flex-col flex items-center"
+	class:mx-2={!topAnchored}
+	hidden={!map}
+	transition:fade={{ duration: 90 }}
+>
 	{#if topAnchored}
 		<LocateFab {map} />
 		{@render searchFab()}
