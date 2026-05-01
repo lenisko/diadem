@@ -488,5 +488,7 @@
 	"count_xp": "{count} XP",
 	"filter_template_invasion_leaders": "Liderzy Team Rocket",
 	"join_server": "Dołącz do serwera",
-	"language_polish": "Polski"
+	"language_polish": "Polski",
+	"settings_search_below_weather_title": "Wyszukiwanie pod pogodą",
+	"settings_search_below_weather_description": "Umieść przyciski wyszukiwania i lokalizacji pod skrzynką pogody"
 }
