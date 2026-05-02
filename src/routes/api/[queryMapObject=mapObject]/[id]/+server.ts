@@ -39,7 +39,7 @@ export const GET: RequestHandler = async ({ params, locals, fetch, getClientAddr
 
 	if (!data) error(constants.HTTP_STATUS_NOT_FOUND);
 
-	const subs = MAP_OBJECT_SUB_FEATURES[type] ?? [];
+	const subs = MAP_OBJECT_SUB_FEATURES[type];
 	const pointAllowed = subs.some((f) => isPointInAllowedArea(locals.perms, f, data.lat, data.lon));
 	if (!pointAllowed) error(constants.HTTP_STATUS_UNAUTHORIZED);
 

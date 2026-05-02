@@ -5,7 +5,7 @@ import { MapObjectType, type MinMapObject } from "@/lib/mapObjects/mapObjectType
 import { requestLimits } from "@/lib/server/api/rateLimit";
 import { getNormalizedForm } from "@/lib/utils/pokemonUtils";
 import { isPointInAllowedArea, type PermittedPolygon } from "@/lib/services/user/checkPerm";
-import { matchMaxBattleFilterset, shouldDisplayStation } from "@/lib/features/filterLogic/station";
+import { shouldDisplayStation } from "@/lib/features/filterLogic/station";
 import { Features, type FeaturesKey, type Perms } from "@/lib/utils/features";
 
 export class StationQuery extends DbMapObjectQuery<StationData, FilterStation> {
@@ -46,20 +46,8 @@ export class StationQuery extends DbMapObjectQuery<StationData, FilterStation> {
 		perms?: Perms
 	): boolean {
 		if (!perms) return shouldDisplayStation(data, filter);
-
 		const has = (f: FeaturesKey) => isPointInAllowedArea(perms, f, data.lat, data.lon);
-
-		if (!filter.enabled) return false;
-
-		if (has(Features.STATION) && filter.stationPlain.enabled) return true;
-
-		if (has(Features.DYNAMAX)) {
-			const maxBattleFilters = filter.maxBattle.filters.filter((f) => f.enabled);
-			if (maxBattleFilters.length === 0 && !filter.stationPlain.enabled) return true;
-			if (matchMaxBattleFilterset(data, filter)) return true;
-		}
-
-		return false;
+		return shouldDisplayStation(data, filter, has);
 	}
 
 	prepare(data: MinMapObject<StationData>, perms?: Perms): void {

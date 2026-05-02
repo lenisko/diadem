@@ -5,13 +5,45 @@ import { getServerConfig } from "@/lib/services/config/config.server";
 import type { Permissions as ConfigRule } from "@/lib/services/config/configTypes";
 import { type KojiFeatures } from "@/lib/features/koji";
 import { fetchKojiGeofences } from "@/lib/server/api/kojiApi";
-import type { FeaturesKey, PermArea, Perms } from "@/lib/utils/features";
+import { Features, type FeaturesKey, type PermArea, type Perms } from "@/lib/utils/features";
+import { MapObjectType } from "@/lib/mapObjects/mapObjectTypes";
 import { getLogger } from "@/lib/utils/logger";
 
 const log = getLogger("permissions");
 
 let initializedEveryonePerms: boolean = false;
 let everyonePerms: Perms = { everywhere: [], areas: [] };
+
+const LEGACY_UMBRELLA_FAMILIES: Record<string, FeaturesKey[]> = {
+	[MapObjectType.POKESTOP]: [
+		Features.QUEST,
+		Features.LURE,
+		Features.INVASION,
+		Features.SHOWCASE,
+		Features.KECLEON,
+		Features.GOLD_POKESTOP
+	],
+	[MapObjectType.GYM]: [Features.RAID, Features.DEFENDER],
+	[MapObjectType.STATION]: [Features.DYNAMAX]
+};
+
+function warnLegacyUmbrellaGrants(rules: ConfigRule[] | undefined) {
+	if (!rules) return;
+	for (const rule of rules) {
+		const features = rule.features ?? [];
+		if (features.includes(Features.ALL)) continue;
+		for (const [family, subs] of Object.entries(LEGACY_UMBRELLA_FAMILIES)) {
+			if (!features.includes(family as FeaturesKey)) continue;
+			if (subs.some((s) => features.includes(s))) continue;
+			log.warning(
+				"Permission rule grants '%s' without any sub-feature. Previously this granted %s as an umbrella; now it grants the plain entity only. Add explicit sub-feature keys to restore prior behavior. Rule: %s",
+				family,
+				subs.join(", "),
+				JSON.stringify(rule)
+			);
+		}
+	}
+}
 
 function addFeatures(featureArray: FeaturesKey[], features: FeaturesKey[] | undefined) {
 	if (!features) return;
@@ -70,8 +102,11 @@ export async function getEveryonePerms(thisFetch: typeof fetch, geofences?: Koji
 
 	if (!geofences) geofences = await getGeofences(thisFetch);
 
+	const allRules = getServerConfig().permissions;
+	warnLegacyUmbrellaGrants(allRules);
+
 	const perms: Perms = { everywhere: [], areas: [] };
-	for (const rule of getServerConfig().permissions ?? []) {
+	for (const rule of allRules ?? []) {
 		if (rule.everyone) {
 			handleRule(rule, perms, geofences);
 		}

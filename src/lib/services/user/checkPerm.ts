@@ -10,7 +10,13 @@ import {
 	union
 } from "@turf/turf";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
-import { Features, MAP_OBJECT_SUB_FEATURES, type FeaturesKey, type Perms } from "@/lib/utils/features";
+import {
+	Features,
+	MAP_OBJECT_SUB_FEATURES,
+	type FeaturesKey,
+	type PermArea,
+	type Perms
+} from "@/lib/utils/features";
 import type { MapObjectType } from "@/lib/mapObjects/mapObjectTypes";
 import { getLogger } from "@/lib/utils/logger";
 
@@ -46,12 +52,14 @@ export type PermittedBounds = {
 	polygon: PermittedPolygon;
 };
 
-export function checkFeatureInBounds(
+function checkBoundsByPredicate(
 	perms: Perms,
-	feature: FeaturesKey,
-	bounds: Bounds
+	bounds: Bounds,
+	matchEverywhere: () => boolean,
+	matchArea: (area: PermArea) => boolean,
+	logCtx: string
 ): PermittedBounds | null {
-	if (isFeatureInFeatureList(perms.everywhere, feature)) return { bounds, polygon: null };
+	if (matchEverywhere()) return { bounds, polygon: null };
 
 	const start = performance.now();
 
@@ -65,98 +73,11 @@ export function checkFeatureInBounds(
 		]
 	]);
 
-	const permittedPolygons: Feature<Polygon>[] = [];
-	for (const area of perms.areas) {
-		if (isFeatureInFeatureList(area.features, feature)) {
-			if (area.polygon) {
-				permittedPolygons.push(makeFeature(area.polygon));
-			}
-		}
-	}
-
-	// If no permitted areas have this feature (or none have polygons), deny access
-	if (permittedPolygons.length === 0) {
-		return null;
-	}
-
-	// Find intersection of viewport with each permitted area and collect results
-	let combinedIntersection: PermittedPolygon = null;
-	for (const permittedPolygon of permittedPolygons) {
-		const areaIntersection = intersect(featureCollection([viewportPolygon, permittedPolygon]));
-		if (areaIntersection) {
-			if (!combinedIntersection) {
-				combinedIntersection = areaIntersection as Feature<Polygon | MultiPolygon>;
-			} else {
-				combinedIntersection = union(
-					featureCollection([
-						combinedIntersection,
-						areaIntersection as Feature<Polygon | MultiPolygon>
-					])
-				) as PermittedPolygon;
-			}
-		}
-	}
-
-	log.debug(
-		"calculated area intersections | areas: %d | feature: %s | any match permissions: %s | took: %fms",
-		permittedPolygons.length,
-		feature,
-		Boolean(combinedIntersection),
-		(performance.now() - start).toFixed(1)
-	);
-
-	// If no intersection with any permitted area, deny access
-	if (!combinedIntersection) {
-		return null;
-	}
-
-	const result = bbox(combinedIntersection);
-
-	return {
-		bounds: {
-			minLon: result[0],
-			minLat: result[1],
-			maxLon: result[2],
-			maxLat: result[3]
-		},
-		polygon: combinedIntersection
-	};
-}
-
-export function checkAnySubFeatureInBounds(
-	perms: Perms,
-	type: MapObjectType,
-	bounds: Bounds
-): PermittedBounds | null {
-	const subs = MAP_OBJECT_SUB_FEATURES[type];
-	if (!subs) return null;
-
-	for (const feature of subs) {
-		if (isFeatureInFeatureList(perms.everywhere, feature)) {
-			return { bounds, polygon: null };
-		}
-	}
-
-	const start = performance.now();
-
-	const viewportPolygon = polygon([
-		[
-			[bounds.minLon, bounds.minLat],
-			[bounds.minLon, bounds.maxLat],
-			[bounds.maxLon, bounds.maxLat],
-			[bounds.maxLon, bounds.minLat],
-			[bounds.minLon, bounds.minLat]
-		]
-	]);
-
-	const seen = new Set<unknown>();
 	const permittedPolygons: Feature<Polygon>[] = [];
 	for (const area of perms.areas) {
 		if (!area.polygon) continue;
-		if (seen.has(area.polygon)) continue;
-		if (subs.some((f) => isFeatureInFeatureList(area.features, f))) {
+		if (matchArea(area)) {
 			permittedPolygons.push(makeFeature(area.polygon));
-			seen.add(area.polygon);
 		}
 	}
 
@@ -180,8 +101,8 @@ export function checkAnySubFeatureInBounds(
 	}
 
 	log.debug(
-		"calculated any-sub area intersections | type: %s | areas: %d | match: %s | took: %fms",
-		type,
+		"calculated area intersections | %s | areas: %d | match: %s | took: %fms",
+		logCtx,
 		permittedPolygons.length,
 		Boolean(combinedIntersection),
 		(performance.now() - start).toFixed(1)
@@ -199,6 +120,37 @@ export function checkAnySubFeatureInBounds(
 		},
 		polygon: combinedIntersection
 	};
+}
+
+export function checkFeatureInBounds(
+	perms: Perms,
+	feature: FeaturesKey,
+	bounds: Bounds
+): PermittedBounds | null {
+	return checkBoundsByPredicate(
+		perms,
+		bounds,
+		() => isFeatureInFeatureList(perms.everywhere, feature),
+		(area) => isFeatureInFeatureList(area.features, feature),
+		`feature: ${feature}`
+	);
+}
+
+export function checkAnySubFeatureInBounds(
+	perms: Perms,
+	type: MapObjectType,
+	bounds: Bounds
+): PermittedBounds | null {
+	const subs = MAP_OBJECT_SUB_FEATURES[type];
+	if (!subs) return null;
+
+	return checkBoundsByPredicate(
+		perms,
+		bounds,
+		() => subs.some((f) => isFeatureInFeatureList(perms.everywhere, f)),
+		(area) => subs.some((f) => isFeatureInFeatureList(area.features, f)),
+		`type: ${type}`
+	);
 }
 
 export function isPointInAllowedArea(
