@@ -1,12 +1,13 @@
 import { error, json } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
 import { getLogger } from "@/lib/utils/logger";
-import { hasFeatureAnywhereServer } from "@/lib/server/auth/checkIfAuthed";
+import { hasAnySubFeatureAnywhereServer } from "@/lib/server/auth/checkIfAuthed";
 import { isPointInAllowedArea } from "@/lib/services/user/checkPerm";
 import { querySingleMapObject } from "@/lib/server/queryMapObjects/queryMapObjects";
 import type { MapObjectType } from "@/lib/mapObjects/mapObjectTypes";
 import { rateLimitConsume } from "@/lib/server/api/rateLimit";
 import { respond } from "@/lib/server/api/respond";
+import { MAP_OBJECT_SUB_FEATURES } from "@/lib/utils/features";
 import { constants } from "http2";
 
 const log = getLogger("mapobject id");
@@ -16,7 +17,7 @@ export const GET: RequestHandler = async ({ params, locals, fetch, getClientAddr
 	const type = params.queryMapObject as MapObjectType;
 
 	const start = performance.now();
-	if (!hasFeatureAnywhereServer(locals.perms, params.queryMapObject, locals.user))
+	if (!hasAnySubFeatureAnywhereServer(locals.perms, type, locals.user))
 		error(constants.HTTP_STATUS_UNAUTHORIZED);
 
 	const [allowed, _remaining, totalLimit, headers] = await rateLimitConsume(rateLimitKey, 2, type);
@@ -34,12 +35,13 @@ export const GET: RequestHandler = async ({ params, locals, fetch, getClientAddr
 		);
 	}
 
-	const data = await querySingleMapObject(params.queryMapObject, params.id, fetch);
+	const data = await querySingleMapObject(params.queryMapObject, params.id, fetch, locals.perms);
 
 	if (!data) error(constants.HTTP_STATUS_NOT_FOUND);
 
-	if (!isPointInAllowedArea(locals.perms, params.queryMapObject, data.lat, data.lon))
-		error(constants.HTTP_STATUS_UNAUTHORIZED);
+	const subs = MAP_OBJECT_SUB_FEATURES[type] ?? [];
+	const pointAllowed = subs.some((f) => isPointInAllowedArea(locals.perms, f, data.lat, data.lon));
+	if (!pointAllowed) error(constants.HTTP_STATUS_UNAUTHORIZED);
 
 	log.info(
 		"[%s] Serving single map object / time: %dms",

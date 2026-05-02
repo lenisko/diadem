@@ -6,13 +6,21 @@ import { requestLimits } from "@/lib/server/api/rateLimit";
 import { queryJoined } from "@/lib/server/db/external/internalQuery";
 import { getNormalizedForm } from "@/lib/utils/pokemonUtils";
 import { currentTimestamp } from "@/lib/utils/currentTimestamp";
-import type { PermittedPolygon } from "@/lib/services/user/checkPerm";
+import { isPointInAllowedArea, type PermittedPolygon } from "@/lib/services/user/checkPerm";
 import {
 	shouldDisplayIncident,
 	shouldDisplayLure,
 	shouldDisplayQuest
 } from "@/lib/features/filterLogic/pokestop";
-import { hasFortActiveLure, parseQuestReward } from "@/lib/utils/pokestopUtils";
+import {
+	hasFortActiveLure,
+	isIncidentContest,
+	isIncidentGold,
+	isIncidentInvasion,
+	isIncidentKecleon,
+	parseQuestReward
+} from "@/lib/utils/pokestopUtils";
+import { Features, type FeaturesKey, type Perms } from "@/lib/utils/features";
 
 const FIELDS_POKESTOP = [
 	"pokestop.id",
@@ -80,11 +88,17 @@ export class PokestopQuery extends DbMapObjectQuery<PokestopData, FilterPokestop
 	filter(
 		data: MinMapObject<PokestopData>,
 		filter: FilterPokestop,
-		polygon: PermittedPolygon
+		polygon: PermittedPolygon,
+		perms?: Perms
 	): boolean {
-		let showThis = Boolean(filter.pokestopPlain.enabled || shouldDisplayLure(data, filter));
+		const has = (f: FeaturesKey) => !perms || isPointInAllowedArea(perms, f, data.lat, data.lon);
 
-		if (!showThis && filter.quest.enabled) {
+		let showThis = Boolean(
+			(filter.pokestopPlain.enabled && has(Features.POKESTOP)) ||
+				(has(Features.LURE) && shouldDisplayLure(data, filter))
+		);
+
+		if (!showThis && filter.quest.enabled && has(Features.QUEST)) {
 			for (const quest of data.quests) {
 				if (shouldDisplayQuest(quest, { mapId: undefined }, filter)) {
 					showThis = true;
@@ -95,6 +109,10 @@ export class PokestopQuery extends DbMapObjectQuery<PokestopData, FilterPokestop
 
 		if (!showThis) {
 			for (const incident of data?.incident ?? []) {
+				if (isIncidentInvasion(incident) && !has(Features.INVASION)) continue;
+				if (isIncidentContest(incident) && !has(Features.SHOWCASE)) continue;
+				if (isIncidentKecleon(incident) && !has(Features.KECLEON)) continue;
+				if (isIncidentGold(incident) && !has(Features.GOLD_POKESTOP)) continue;
 				if (shouldDisplayIncident(incident, data, filter)) {
 					showThis = true;
 					break;
@@ -105,7 +123,9 @@ export class PokestopQuery extends DbMapObjectQuery<PokestopData, FilterPokestop
 		return showThis;
 	}
 
-	prepare(data: MinMapObject<PokestopData>): void {
+	prepare(data: MinMapObject<PokestopData>, perms?: Perms): void {
+		const has = (f: FeaturesKey) => !perms || isPointInAllowedArea(perms, f, data.lat, data.lon);
+
 		data.quests = [];
 		if (data.alternative_quest_target && data.alternative_quest_rewards) {
 			const reward = parseQuestReward(data.alternative_quest_rewards);
@@ -153,6 +173,49 @@ export class PokestopQuery extends DbMapObjectQuery<PokestopData, FilterPokestop
 			incident.slot_1_form = getNormalizedForm(incident.slot_1_pokemon_id, incident.slot_1_form);
 			incident.slot_2_form = getNormalizedForm(incident.slot_2_pokemon_id, incident.slot_2_form);
 			incident.slot_3_form = getNormalizedForm(incident.slot_3_pokemon_id, incident.slot_3_form);
+		}
+
+		if (!perms) return;
+
+		if (!has(Features.QUEST)) {
+			data.quests = [];
+			data.quest_timestamp = undefined;
+			data.quest_target = undefined;
+			data.quest_rewards = undefined;
+			data.quest_title = undefined;
+			data.quest_expiry = undefined;
+			data.alternative_quest_timestamp = undefined;
+			data.alternative_quest_target = undefined;
+			data.alternative_quest_rewards = undefined;
+			data.alternative_quest_title = undefined;
+			data.alternative_quest_expiry = undefined;
+		}
+
+		if (!has(Features.SHOWCASE)) {
+			data.showcase_pokemon_id = undefined;
+			data.showcase_pokemon_form_id = undefined;
+			data.showcase_focus = undefined;
+			data.showcase_pokemon_type_id = undefined;
+			data.showcase_ranking_standard = undefined;
+			data.showcase_expiry = undefined;
+			data.showcase_rankings = undefined;
+			data.contest_focus = undefined;
+		}
+
+		if (Array.isArray(data.incident) && data.incident.length > 0) {
+			data.incident = data.incident.filter((incident) => {
+				if (!incident || !incident.id) return false;
+				if (isIncidentInvasion(incident)) return has(Features.INVASION);
+				if (isIncidentContest(incident)) return has(Features.SHOWCASE);
+				if (isIncidentKecleon(incident)) return has(Features.KECLEON);
+				if (isIncidentGold(incident)) return has(Features.GOLD_POKESTOP);
+				return true;
+			});
+		}
+
+		if (!has(Features.LURE) && hasFortActiveLure(data)) {
+			data.lure_id = undefined;
+			data.lure_expire_timestamp = undefined;
 		}
 	}
 }

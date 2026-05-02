@@ -17,6 +17,7 @@ import { RouteQuery } from "@/lib/server/queryMapObjects/queryRoute";
 import { TappableQuery } from "@/lib/server/queryMapObjects/queryTappable";
 import { error } from "@sveltejs/kit";
 import type { PermittedPolygon } from "@/lib/services/user/checkPerm";
+import type { Perms } from "@/lib/utils/features";
 
 const registry: Partial<Record<MapObjectType, MapObjectQuery<any, any>>> = {
 	[MapObjectType.GYM]: new GymQuery(),
@@ -41,19 +42,21 @@ export async function queryMapObjects<Data extends MapData>(
 	filter: AnyFilter | undefined,
 	polygon: PermittedPolygon = null,
 	since?: number,
-	limit?: number
+	limit?: number,
+	perms?: Perms
 ): Promise<MapObjectResponse<Data>> {
 	if (filter !== undefined && !filter.enabled) {
 		return { examined: 0, data: [] };
 	}
 
-	return getQuery(type).getMultiple(bounds, filter, polygon, since, limit);
+	return getQuery(type).getMultiple(bounds, filter, polygon, since, limit, perms);
 }
 
 export async function querySingleMapObject(
 	type: MapObjectType,
 	id: string,
-	thisFetch: typeof fetch = fetch
+	thisFetch: typeof fetch = fetch,
+	perms?: Perms
 ) {
-	return getQuery(type).getSingle(id, thisFetch);
+	return getQuery(type).getSingle(id, thisFetch, perms);
 }
