@@ -27,13 +27,43 @@
 		mapObject={MapObjectType.POKESTOP}
 		isFilterable={false}
 		subCategories={[
-			{ title: m.plain_pokestops(), category: "pokestopPlain", filterable: false },
-			{ title: m.pogo_quests(), category: "quest", filterModal: "filtersetQuest" },
-			{ title: m.pogo_invasion(), category: "invasion", filterModal: "filtersetInvasion" },
-			{ title: m.lures(), category: "lure", filterable: false },
-			{ title: m.contests(), category: "contest", filterable: false },
-			{ title: m.kecleon(), category: "kecleon", filterable: false },
-			{ title: m.golden_pokestops(), category: "goldPokestop", filterable: false }
+			{
+				title: m.plain_pokestops(),
+				category: "pokestopPlain",
+				filterable: false,
+				subPermission: Features.POKESTOP
+			},
+			{
+				title: m.pogo_quests(),
+				category: "quest",
+				filterModal: "filtersetQuest",
+				subPermission: Features.QUEST
+			},
+			{
+				title: m.pogo_invasion(),
+				category: "invasion",
+				filterModal: "filtersetInvasion",
+				subPermission: Features.INVASION
+			},
+			{ title: m.lures(), category: "lure", filterable: false, subPermission: Features.LURE },
+			{
+				title: m.contests(),
+				category: "contest",
+				filterable: false,
+				subPermission: Features.SHOWCASE
+			},
+			{
+				title: m.kecleon(),
+				category: "kecleon",
+				filterable: false,
+				subPermission: Features.KECLEON
+			},
+			{
+				title: m.golden_pokestops(),
+				category: "goldPokestop",
+				filterable: false,
+				subPermission: Features.GOLD_POKESTOP
+			}
 		]}
 	/>
 
@@ -44,8 +74,18 @@
 		mapObject={MapObjectType.GYM}
 		isFilterable={false}
 		subCategories={[
-			{ title: m.plain_gyms(), category: "gymPlain", filterable: false },
-			{ title: m.raids(), category: "raid", filterModal: "filtersetRaid" }
+			{
+				title: m.plain_gyms(),
+				category: "gymPlain",
+				filterable: false,
+				subPermission: Features.GYM
+			},
+			{
+				title: m.raids(),
+				category: "raid",
+				filterModal: "filtersetRaid",
+				subPermission: Features.RAID
+			}
 		]}
 	/>
 
@@ -56,8 +96,18 @@
 		mapObject={MapObjectType.STATION}
 		isFilterable={false}
 		subCategories={[
-			{ title: m.plain_stations(), category: "stationPlain", filterable: false },
-			{ title: m.max_battles(), category: "maxBattle", filterModal: "filtersetMaxBattle" }
+			{
+				title: m.plain_stations(),
+				category: "stationPlain",
+				filterable: false,
+				subPermission: Features.STATION
+			},
+			{
+				title: m.max_battles(),
+				category: "maxBattle",
+				filterModal: "filtersetMaxBattle",
+				subPermission: Features.DYNAMAX
+			}
 		]}
 	/>
 

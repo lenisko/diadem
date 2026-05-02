@@ -6,7 +6,7 @@
 	import FilterControl from "@/components/menus/filters/FilterControl.svelte";
 
 	import { slide } from "svelte/transition";
-	import { hasFeatureAnywhere } from "@/lib/services/user/checkPerm";
+	import { hasAnySubFeatureAnywhere, hasFeatureAnywhere } from "@/lib/services/user/checkPerm";
 	import { getUserDetails } from "@/lib/services/user/userDetails.svelte";
 	import type { AnyFilter, FilterCategory } from "@/lib/features/filters/filters";
 	import Switch from "@/components/ui/input/Switch.svelte";
@@ -44,8 +44,16 @@
 			category: FilterCategory;
 			filterModal?: ModalType;
 			filterable?: boolean;
+			subPermission?: FeaturesKey;
 		}[];
 	} = $props();
+
+	const perms = $derived(getUserDetails().permissions);
+	const sectionVisible = $derived(
+		subCategories.length > 0
+			? hasAnySubFeatureAnywhere(perms, mapObject)
+			: hasFeatureAnywhere(perms, requiredPermission)
+	);
 
 	let subcategoriesExpanded: boolean = $state(false);
 
@@ -79,7 +87,7 @@
 	}
 </script>
 
-{#if hasFeatureAnywhere(getUserDetails().permissions, requiredPermission)}
+{#if sectionVisible}
 	<Card class="py-1 px-2">
 		<FilterControl
 			{title}
@@ -97,16 +105,18 @@
 			{#if subcategoriesExpanded}
 				<div class="mb-2" transition:slide={{ duration: 80 }}>
 					{#each subCategories as subcategory}
-						<FilterControl
-							{mapObject}
-							title={subcategory.title}
-							majorCategory={category}
-							subCategory={subcategory.category}
-							filterModal={subcategory.filterModal}
-							isFilterable={subcategory.filterable ?? true}
-							onEnabledChange={onSubEnabledChange}
-							filter={getUserSettings().filters[category][subcategory.category]}
-						/>
+						{#if !subcategory.subPermission || hasFeatureAnywhere(perms, subcategory.subPermission)}
+							<FilterControl
+								{mapObject}
+								title={subcategory.title}
+								majorCategory={category}
+								subCategory={subcategory.category}
+								filterModal={subcategory.filterModal}
+								isFilterable={subcategory.filterable ?? true}
+								onEnabledChange={onSubEnabledChange}
+								filter={getUserSettings().filters[category][subcategory.category]}
+							/>
+						{/if}
 					{/each}
 				</div>
 			{/if}
