@@ -2,7 +2,6 @@
 	import * as m from "@/lib/paraglide/messages";
 	import { Cloud, Moon, Paintbrush, Sun } from "lucide-svelte";
 	import { getUserSettings } from "@/lib/services/userSettings.svelte";
-	import { isMenuSidebar } from "@/lib/utils/device";
 	import {
 		AVAILABLE_LANGUAGES,
 		AVAILABLE_MAP_PROVIDERS,
@@ -12,7 +11,6 @@
 	import { getConfig } from "@/lib/services/config/config";
 	import MenuCard from "@/components/menus/MenuCard.svelte";
 	import SliderSteps from "@/components/ui/input/slider/SliderSteps.svelte";
-	import Toggle from "@/components/ui/input/Toggle.svelte";
 	import Select from "@/components/ui/input/Select.svelte";
 	import MenuGeneric from "@/components/menus/MenuGeneric.svelte";
 	import RadioGroup from "@/components/ui/input/selectgroup/RadioGroup.svelte";
@@ -25,31 +23,6 @@
 </script>
 
 <MenuCard title={m.settings_appearance()} Icon={Paintbrush}>
-	<Select
-		class="py-3 px-4 "
-		title={m.settings_language()}
-		value={getLocale()}
-		onselect={(locale) => setLocale(locale)}
-		options={AVAILABLE_LANGUAGES}
-	/>
-
-	{#if !isMenuSidebar()}
-		<Toggle
-			title={m.settings_left_handed_mode_title()}
-			description={m.settings_left_handed_mode_description()}
-			onclick={() => onSettingsChange("isLeftHanded", !getUserSettings().isLeftHanded)}
-			value={getUserSettings().isLeftHanded}
-		/>
-	{/if}
-
-	<Toggle
-		title={m.settings_search_below_weather_title()}
-		description={m.settings_search_below_weather_description()}
-		onclick={() =>
-			onSettingsChange("searchBelowWeather", !getUserSettings().searchBelowWeather)}
-		value={getUserSettings().searchBelowWeather}
-	/>
-
 	<MenuGeneric title={m.settings_theme()}>
 		<RadioGroup
 			value={mode.current}
@@ -121,5 +94,13 @@
 		value={getUserSettings().externalMapProvider}
 		onselect={(mapProvider) => onSettingsChange("externalMapProvider", mapProvider)}
 		options={AVAILABLE_MAP_PROVIDERS}
+	/>
+
+	<Select
+		class="py-3 px-4 "
+		title={m.settings_language()}
+		value={getLocale()}
+		onselect={(locale) => setLocale(locale)}
+		options={AVAILABLE_LANGUAGES}
 	/>
 </MenuCard>
