@@ -36,10 +36,7 @@ function warnLegacyUmbrellaGrants(rules: ConfigRule[] | undefined) {
 			if (!features.includes(family as FeaturesKey)) continue;
 			if (subs.some((s) => features.includes(s))) continue;
 			log.warning(
-				"Permission rule grants '%s' without any sub-feature. Previously this granted %s as an umbrella; now it grants the plain entity only. Add explicit sub-feature keys to restore prior behavior. Rule: %s",
-				family,
-				subs.join(", "),
-				JSON.stringify(rule)
+				`Permission rule grants '${family}' without any sub-feature. Previously this granted ${subs.join(", ")} as an umbrella; now it grants the plain entity only. Add explicit sub-feature keys to restore prior behavior. Rule: ${JSON.stringify(rule)}`
 			);
 		}
 	}
