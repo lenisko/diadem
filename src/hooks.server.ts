@@ -31,6 +31,15 @@ import { locales, serverAsyncLocalStorage, setLocale } from "@/lib/paraglide/run
 
 process.title = "Diadem";
 
+process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+	if (err?.code === "ENOENT" && typeof err.path === "string" && err.path.includes("/_app/")) {
+		console.warn(`[diadem] stale asset request, ignoring: ${err.path}`);
+		return;
+	}
+	console.error("[diadem] uncaughtException:", err);
+	process.exit(1);
+});
+
 const paraglideHandle: Handle = ({ event, resolve }) =>
 	paraglideMiddleware(event.request, ({ request: localizedRequest, locale }) => {
 		event.request = localizedRequest;
