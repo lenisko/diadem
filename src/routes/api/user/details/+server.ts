@@ -23,6 +23,23 @@ export const GET: RequestHandler = async (event) => {
 		);
 	}
 
+	// Header-auth path: user came from an upstream gateway, no Discord session.
+	// Display identity lives on locals.headerProfile, not in the DB user row.
+	if (event.locals.authSource === "header") {
+		const profile = event.locals.headerProfile;
+		return json({
+			details: {
+				id: user.discordId,
+				username: profile?.username ? "@" + profile.username : "",
+				displayName: profile?.displayName || profile?.username || "",
+				avatarUrl: profile?.avatarUrl ?? ""
+			},
+			permissions: event.locals.perms,
+			isGuildMember: true,
+			isHeaderAuth: true
+		} as UserData);
+	}
+
 	const accessToken = await getDiscordAccessToken(event);
 	if (!accessToken) {
 		return json({ permissions: removeRedundantPermissionAreas(event.locals.perms) } as UserData, {

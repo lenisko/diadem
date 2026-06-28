@@ -17,7 +17,10 @@ const discordConfig = authConfig.discord;
 const authSecret = authConfig.secret || process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET;
 
 export const AUTH_BASE_PATH = "/api/auth";
+// Discord/Better Auth specifically — also gates whether the `auth` instance below is built.
 export const IS_AUTH_ENABLED = Boolean(authConfig.enabled);
+// Upstream-gateway header auth is a separate auth source that doesn't use Better Auth.
+export const IS_HEADER_AUTH_ENABLED = Boolean(authConfig.headerAuth?.enabled);
 
 export const auth = IS_AUTH_ENABLED
 	? betterAuth({
@@ -91,12 +94,18 @@ type AuthInstance = NonNullable<typeof auth>;
 export type BetterAuthSession = AuthInstance["$Infer"]["Session"];
 export type BetterAuthSessionData = BetterAuthSession["session"];
 
+// Discord/Better Auth availability only. Discord-specific routes (login, logout,
+// native exchange) gate on this, so it must NOT report header auth as enabled —
+// otherwise those routes skip their 404 guard and hit the null `auth` instance.
 export function isAuthEnabled() {
 	return IS_AUTH_ENABLED;
 }
 
+// Whether unauthenticated access is disallowed. Header auth is a valid auth
+// source for this purpose, so an authenticated identity is required when either
+// source is enabled (unless explicitly marked optional).
 export function isAuthRequired() {
-	return IS_AUTH_ENABLED && !authConfig.optional;
+	return (IS_AUTH_ENABLED || IS_HEADER_AUTH_ENABLED) && !authConfig.optional;
 }
 
 function applyAuthCookies(event: RequestEvent, headers: Headers) {
