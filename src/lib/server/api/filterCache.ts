@@ -26,11 +26,16 @@ const MAX_CACHED_FILTER_BYTES = 16 * 1024;
  * per-filter ceiling is gigabytes. Oldest keys are evicted to stay under it.
  *
  * Measured as serialized length, while what is retained is the decoded object
- * graph — several times larger in the heap for small-key JSON. The budget is set
- * low with that multiplier in mind, and it is per process, so a clustered
- * deployment holds one budget per worker.
+ * graph — several times larger in the heap for small-key JSON — and held per
+ * cache, so a clustered deployment keeps one budget per worker.
+ *
+ * Sized for concurrency, not just for safety: a client retains a few tens of KB
+ * across its map object types, so a budget in the single-digit MB starts
+ * evicting after only a few hundred simultaneous visitors. Every eviction costs
+ * that client the extra round trip this cache exists to remove, so a public
+ * instance that sheds entries constantly is worse off than one with no cache.
  */
-const FILTER_CACHE_BYTE_BUDGET = 8 * 1024 * 1024;
+const FILTER_CACHE_BYTE_BUDGET = 32 * 1024 * 1024;
 
 type CachedFilter = { filter: AnyFilter; bytes: number };
 

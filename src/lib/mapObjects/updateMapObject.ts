@@ -148,8 +148,9 @@ export async function fetchMapObjects<T extends MapData>(
 		}
 
 		if (filterHash !== undefined) {
-			// Read on failures too — the server sets it there so a client being
-			// rate-limited still learns to stop asking by hash.
+			// Checked on any response rather than only a success. The server can
+			// only produce it alongside one today, but reading it unconditionally
+			// costs nothing and does not go stale if that changes.
 			if (response.headers.get("X-Filter-Cached") === "0") {
 				alwaysSendFilterHashes.add(filterHash);
 				knownFilterHashes.delete(filterHash);

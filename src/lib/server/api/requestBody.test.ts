@@ -76,8 +76,9 @@ describe("readRequestBody", () => {
 	it("refuses an oversized body that declares no length", async () => {
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
-				// Several chunks, so the cap has to trip mid-read rather than on a length.
-				for (let i = 0; i < 6; i++) controller.enqueue(new Uint8Array(64 * 1024));
+				// Several chunks past the cap, so it has to trip mid-read rather than
+				// on a declared length.
+				for (let i = 0; i < 24; i++) controller.enqueue(new Uint8Array(64 * 1024));
 				controller.close();
 			}
 		});

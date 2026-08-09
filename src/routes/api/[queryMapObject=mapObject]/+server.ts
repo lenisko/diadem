@@ -112,9 +112,9 @@ export const POST: RequestHandler = async (event) => {
 			? data.filterHash
 			: undefined;
 	let filter: AnyFilter | undefined = data.filter;
-	// Carried on the failures too: a client that never learns its filter is
-	// uncacheable retries by hash forever, doubling its request rate exactly when
-	// the server is shedding load.
+	// Only ever set once a filter has been sent and the cache has refused it, so
+	// it rides on the success below and nowhere else — the earlier returns either
+	// precede the read or happen when no filter was sent at all.
 	let extraHeaders: Record<string, string> | undefined;
 
 	// A hash that was sent but is malformed must still be answered with a resend.

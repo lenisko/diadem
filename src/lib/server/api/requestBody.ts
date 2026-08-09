@@ -24,8 +24,13 @@ const MAX_DEPTH = 64;
 /**
  * Raw bytes buffered before decoding. The decode ceilings above can't apply
  * until the whole body is in memory, so this is what actually bounds that.
+ *
+ * Well above any real poll — a filter large enough to approach this is already
+ * too large to cache and is sent in full every time — but a cap that a genuine
+ * client could reach would be worse than none: the request 400s, the layer
+ * renders empty, and it does so on every poll from then on.
  */
-const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES = 1024 * 1024;
 
 export type ReadBodyOptions = {
 	/**

@@ -276,25 +276,32 @@ function syncUserSettings(unloading: boolean) {
 		syncTimer = undefined;
 	}
 
-	// A full write carries the position too, so it supersedes a pending one.
-	const sendFull = fullSyncPending;
-	const sendPosition = !sendFull && positionSyncPending;
-	fullSyncPending = false;
-	positionSyncPending = false;
-
-	if (sendFull) {
+	if (fullSyncPending) {
+		fullSyncPending = false;
 		const payload = JSON.stringify(userSettings);
-		if (payload === lastSyncedUserSettings) return;
-		lastSyncedUserSettings = payload;
-		// Sent from the serialized form, so what goes over the wire is exactly what
-		// was compared — and free of the reactive proxies the live object is made of.
-		post(SETTINGS_ENDPOINT, JSON.parse(payload), unloading, () => {
-			lastSyncedUserSettings = undefined;
-		});
-		return;
+
+		if (payload !== lastSyncedUserSettings) {
+			// A full write carries the position too, so it supersedes a pending one.
+			positionSyncPending = false;
+			lastSyncedUserSettings = payload;
+			// Sent from the serialized form, so what goes over the wire is exactly what
+			// was compared — and free of the reactive proxies the live object is made of.
+			post(SETTINGS_ENDPOINT, JSON.parse(payload), unloading, () => {
+				lastSyncedUserSettings = undefined;
+				// Re-arm, so the change is retried on the next one or at unload.
+				// Nothing else would resend it: map moves take the position path now,
+				// where before this they rewrote the whole object and healed it.
+				fullSyncPending = true;
+			});
+			return;
+		}
+		// Nothing to write after all — fall through, so a position queued behind
+		// this one is not swallowed by having been cleared for a send that never
+		// happened.
 	}
 
-	if (sendPosition) {
+	if (positionSyncPending) {
+		positionSyncPending = false;
 		const { center, zoom } = userSettings.mapPosition;
 		post(
 			POSITION_ENDPOINT,
