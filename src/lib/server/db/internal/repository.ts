@@ -45,5 +45,7 @@ export async function setUserMapPosition(
 	if (!settings || typeof settings !== "object") return;
 
 	settings.mapPosition = mapPosition;
-	await setUserSettings(userId, JSON.stringify(settings));
+	// The object, not a string: the column serializes what it is given, so a
+	// string would be stored JSON-encoded a second time and read back as a string.
+	await setUserSettings(userId, settings as never);
 }
