@@ -70,6 +70,21 @@ describe("filterCache", () => {
 		expect(recallFilter(key, MapObjectType.POKEMON, "hot")).toBeDefined();
 	});
 
+	// A logged-out client's key is whatever it sent as its id, so one address can
+	// mint keys freely. Signed-in entries must not be collateral damage.
+	it("does not let anonymous churn evict a signed-in client's filter", () => {
+		const user = "u:signed-in-" + nextClient++;
+		rememberFilter(user, MapObjectType.POKEMON, "mine", filter("mine"));
+
+		// Far more distinct anonymous identities than a single cache would hold.
+		const big = { category: "pokemon", enabled: true, filters: [{ id: "x".repeat(8 * 1024) }] };
+		for (let i = 0; i < 1500; i++) {
+			rememberFilter("c:churn" + i, MapObjectType.POKEMON, "h" + i, big as unknown as AnyFilter);
+		}
+
+		expect(recallFilter(user, MapObjectType.POKEMON, "mine")).toEqual(filter("mine"));
+	});
+
 	it("refuses to cache an oversized filter", () => {
 		const key = client();
 		const huge = {

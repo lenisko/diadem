@@ -139,10 +139,11 @@ export async function fetchMapObjects<T extends MapData>(
 			response = await post(true);
 			// The retry succeeding says nothing about whether hashing works here,
 			// so the run of misses stands until a hash-only poll is answered.
-		} else if (filterHash !== undefined && !sendFilter) {
-			// Only a hash-only poll that worked proves the miss run is over. Counting
-			// total misses instead would retire a hash after three unrelated server
-			// restarts across the life of a long-lived tab.
+		} else if (filterHash !== undefined && !sendFilter && response.ok) {
+			// Only a hash-only poll that actually succeeded proves the miss run is
+			// over. A 429 or a 500 says nothing, and counting those as recoveries
+			// would keep resetting the run on a server that is shedding load — the
+			// case the always-send fallback exists to escape.
 			filterHashMisses.delete(filterHash);
 		}
 

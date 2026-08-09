@@ -19,11 +19,19 @@ function isValid(body: PositionBody): boolean {
 		Number.isFinite(zoom) &&
 		lat >= -90 &&
 		lat <= 90 &&
-		lng >= -180 &&
-		lng <= 180 &&
 		zoom >= 0 &&
 		zoom <= 30
 	);
+}
+
+/**
+ * Fold a longitude back into [-180, 180]. MapLibre keeps counting past the
+ * antimeridian — a user panning east reports 185 rather than -175 — so a range
+ * check on the raw value would reject a perfectly ordinary position.
+ */
+function wrapLongitude(lng: number): number {
+	const wrapped = ((((lng + 180) % 360) + 360) % 360) - 180;
+	return wrapped === -180 ? 180 : wrapped;
 }
 
 /**
@@ -46,7 +54,7 @@ export async function POST({ locals, request }) {
 	}
 
 	await setUserMapPosition(locals.user.id, {
-		center: { lat: body.lat!, lng: body.lng! },
+		center: { lat: body.lat!, lng: wrapLongitude(body.lng!) },
 		zoom: body.zoom!
 	});
 

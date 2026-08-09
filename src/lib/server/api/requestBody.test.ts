@@ -71,6 +71,26 @@ describe("readRequestBody", () => {
 		await expect(readRequestBody(request)).rejects.toThrow(/maxArrayLength/);
 	});
 
+	// Checking a size after arrayBuffer() would be too late, and Content-Length is
+	// absent on a chunked body, so the stream itself is what has to be bounded.
+	it("refuses an oversized body that declares no length", async () => {
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				// Several chunks, so the cap has to trip mid-read rather than on a length.
+				for (let i = 0; i < 6; i++) controller.enqueue(new Uint8Array(64 * 1024));
+				controller.close();
+			}
+		});
+		const request = new Request("http://localhost/api/pokemon", {
+			method: "POST",
+			body: stream,
+			headers: { "Content-Type": "application/msgpack" },
+			// Required by fetch for a stream body, and absent from the DOM types.
+			duplex: "half"
+		} as RequestInit & { duplex: "half" });
+		await expect(readRequestBody(request)).rejects.toThrow(/too large/);
+	});
+
 	it("rejects a body nested past the depth limit", async () => {
 		// Below the encoder's own depth cap of 100, above the reader's limit of 64.
 		let nested: unknown = 1;

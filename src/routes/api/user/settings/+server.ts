@@ -3,7 +3,11 @@ import { noStoreHttpHeaders } from "@/lib/utils/apiUtils.server";
 import { json } from "@sveltejs/kit";
 
 export async function POST({ locals, request }) {
-	if (!locals.user) return json({ error: "Not logged in" }, { headers: noStoreHttpHeaders });
+	// 401, not a 200 with an error body: the client records an ok response as
+	// synced and would never resend a save that failed on an expired session.
+	if (!locals.user) {
+		return json({ error: "Not logged in" }, { status: 401, headers: noStoreHttpHeaders });
+	}
 	await setUserSettings(locals.user.id, await request.json());
 	return json({ error: null }, { headers: noStoreHttpHeaders });
 }

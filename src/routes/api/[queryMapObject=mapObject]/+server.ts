@@ -105,7 +105,12 @@ export const POST: RequestHandler = async (event) => {
 
 	// Clients poll with a filter hash instead of the whole filter. Ask for a
 	// full resend whenever the cached copy is missing or stale.
-	const filterHash = FILTER_HASH_PATTERN.test(data.filterHash ?? "") ? data.filterHash : undefined;
+	// typeof, not just the pattern: a msgpack body can carry a number here, which
+	// would coerce for the test and then never match a stored string key.
+	const filterHash =
+		typeof data.filterHash === "string" && FILTER_HASH_PATTERN.test(data.filterHash)
+			? data.filterHash
+			: undefined;
 	let filter: AnyFilter | undefined = data.filter;
 	// Carried on the failures too: a client that never learns its filter is
 	// uncacheable retries by hash forever, doubling its request rate exactly when

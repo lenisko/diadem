@@ -34,23 +34,43 @@ const FILTER_CACHE_BYTE_BUDGET = 8 * 1024 * 1024;
 
 type CachedFilter = { filter: AnyFilter; bytes: number };
 
-let cachedBytes = 0;
+/** Retained bytes per cache, so one cannot spend the other's budget. */
+const cachedBytes = new Map<TTLCache<string, Map<string, CachedFilter>>, number>();
 
-const filterCache = new TTLCache<string, Map<string, CachedFilter>>({
-	ttl: FILTER_CACHE_TTL,
-	max: FILTER_CACHE_MAX,
-	// Never updateAgeOnGet: it makes get() register an expiry for a key it did
-	// not find, and that phantom then reaches dispose with no value — and is
-	// invisible to `max`, which only counts entries that exist. The TTL is
-	// refreshed explicitly on a hit instead, in recallFilter.
-	dispose: (filters) => {
-		if (!filters) return;
-		for (const entry of filters.values()) cachedBytes -= entry.bytes;
-	}
-});
+function newCache(max: number) {
+	const cache: TTLCache<string, Map<string, CachedFilter>> = new TTLCache({
+		ttl: FILTER_CACHE_TTL,
+		max,
+		// Never updateAgeOnGet: it makes get() register an expiry for a key it did
+		// not find, and that phantom then reaches dispose with no value — and is
+		// invisible to `max`, which only counts entries that exist. The TTL is
+		// refreshed explicitly on a hit instead, in recallFilter.
+		dispose: (filters) => {
+			if (!filters) return;
+			let total = cachedBytes.get(cache) ?? 0;
+			for (const entry of filters.values()) total -= entry.bytes;
+			cachedBytes.set(cache, total);
+		}
+	});
+	cachedBytes.set(cache, 0);
+	return cache;
+}
+
+const authedFilterCache = newCache(FILTER_CACHE_MAX);
+const anonFilterCache = newCache(FILTER_CACHE_MAX);
 
 function cacheKey(clientKey: string, type: MapObjectType): string {
 	return clientKey + " " + type;
+}
+
+/**
+ * Signed-in clients get their own cache. A logged-out client's key is whatever
+ * it sent as its id, so one address can mint keys freely and churn everything
+ * else out; keeping the two apart means that only ever costs other anonymous
+ * clients a resend, and never a signed-in user's entry.
+ */
+function cacheFor(clientKey: string): TTLCache<string, Map<string, CachedFilter>> {
+	return clientKey.startsWith("u:") ? authedFilterCache : anonFilterCache;
 }
 
 /** Returns false when the filter is too large to cache and must always be sent. */
@@ -69,34 +89,36 @@ export function rememberFilter(
 	// mutates a filter" a silent, load-bearing invariant.
 	const stored = JSON.parse(serialized) as AnyFilter;
 
+	const cache = cacheFor(clientKey);
 	const key = cacheKey(clientKey, type);
-	const filters = filterCache.get(key) ?? new Map<string, CachedFilter>();
+	const filters = cache.get(key) ?? new Map<string, CachedFilter>();
 
 	// Re-insert so this hash counts as the most recently used one.
-	const existing = filters.get(hash);
-	if (existing) cachedBytes -= existing.bytes;
+	let total = cachedBytes.get(cache) ?? 0;
+	total -= filters.get(hash)?.bytes ?? 0;
 	filters.delete(hash);
 	filters.set(hash, { filter: stored, bytes });
-	cachedBytes += bytes;
+	total += bytes;
 
 	while (filters.size > FILTERS_PER_KEY) {
 		const oldest = filters.keys().next().value;
 		if (oldest === undefined) break;
-		cachedBytes -= filters.get(oldest)?.bytes ?? 0;
+		total -= filters.get(oldest)?.bytes ?? 0;
 		filters.delete(oldest);
 	}
 
-	filterCache.set(key, filters);
-	evictToBudget();
+	cachedBytes.set(cache, total);
+	cache.set(key, filters);
+	evictToBudget(cache);
 	return true;
 }
 
 /** TTLCache iterates soonest-to-expire first, which with one TTL is oldest first. */
-function evictToBudget() {
-	while (cachedBytes > FILTER_CACHE_BYTE_BUDGET) {
-		const oldest = filterCache.keys().next().value;
+function evictToBudget(cache: TTLCache<string, Map<string, CachedFilter>>) {
+	while ((cachedBytes.get(cache) ?? 0) > FILTER_CACHE_BYTE_BUDGET) {
+		const oldest = cache.keys().next().value;
 		if (oldest === undefined) break;
-		filterCache.delete(oldest);
+		cache.delete(oldest);
 	}
 }
 
@@ -106,8 +128,9 @@ export function recallFilter(
 	type: MapObjectType,
 	hash: string
 ): AnyFilter | undefined {
+	const cache = cacheFor(clientKey);
 	const key = cacheKey(clientKey, type);
-	const filters = filterCache.get(key);
+	const filters = cache.get(key);
 	const entry = filters?.get(hash);
 	if (!filters || !entry) return undefined;
 
@@ -119,6 +142,6 @@ export function recallFilter(
 	// entry expires a TTL after the last full send and every type pays a 409
 	// plus a resend, every TTL, for the life of the session. Only ever on a hit:
 	// setTTL for an absent key creates the same phantom entry get() would.
-	filterCache.setTTL(key, FILTER_CACHE_TTL);
+	cache.setTTL(key, FILTER_CACHE_TTL);
 	return entry.filter;
 }

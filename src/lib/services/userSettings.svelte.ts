@@ -299,16 +299,17 @@ function syncUserSettings(unloading: boolean) {
 }
 
 function post(url: string, payload: string, unloading: boolean, onFailure: () => void) {
-	if (unloading) {
-		// fetch is cancelled while the page unloads; sendBeacon is not.
-		navigator.sendBeacon?.(url, new Blob([payload], { type: "application/json" }));
-		return;
-	}
-
-	fetch(url, { method: "POST", body: payload })
-		.then((response) => {
+	// keepalive rather than sendBeacon: a beacon skips window.fetch, which native
+	// builds patch to reach the configured instance with their bearer token, so a
+	// beacon there would post to the webview origin and be lost. keepalive
+	// outlives the page the same way and still reports what happened.
+	fetch(url, { method: "POST", body: payload, keepalive: unloading })
+		.then(async (response) => {
+			// The endpoint answers 200 with an error body when the session has gone,
+			// so response.ok alone would record a rejected write as a success.
+			const failed = !response.ok || Boolean((await response.json().catch(() => null))?.error);
 			// Let the next change try again rather than assuming this one landed.
-			if (!response.ok) onFailure();
+			if (failed) onFailure();
 		})
 		.catch(onFailure);
 }

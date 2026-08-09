@@ -34,16 +34,11 @@ const MAX_BODY_BYTES = 256 * 1024;
  */
 export async function readRequestBody<T>(request: Request): Promise<T> {
 	const contentType = request.headers.get("Content-Type") ?? "";
+	const raw = await readCapped(request);
 
-	const declared = Number(request.headers.get("Content-Length"));
-	if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
-		throw new Error("Request body too large");
+	if (!contentType.includes("application/msgpack")) {
+		return JSON.parse(new TextDecoder().decode(raw)) as T;
 	}
-
-	if (!contentType.includes("application/msgpack")) return (await request.json()) as T;
-
-	const raw = new Uint8Array(await request.arrayBuffer());
-	if (raw.byteLength > MAX_BODY_BYTES) throw new Error("Request body too large");
 
 	const body = decode(raw, DECODE_LIMITS);
 
@@ -53,6 +48,43 @@ export async function readRequestBody<T>(request: Request): Promise<T> {
 	// so a null there was written deliberately.
 	dropNulls(body, 0);
 	return body as T;
+}
+
+/**
+ * Read the body, refusing to buffer more than the cap. Checking a length after
+ * arrayBuffer() would be too late — the allocation has already happened — and
+ * Content-Length is absent on a chunked body, so neither bounds anything on its
+ * own. Reading the stream does, whatever the client claims.
+ */
+async function readCapped(request: Request): Promise<Uint8Array> {
+	const declared = Number(request.headers.get("Content-Length"));
+	if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+		throw new Error("Request body too large");
+	}
+
+	const reader = request.body?.getReader();
+	if (!reader) return new Uint8Array();
+
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > MAX_BODY_BYTES) {
+			await reader.cancel();
+			throw new Error("Request body too large");
+		}
+		chunks.push(value);
+	}
+
+	const body = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return body;
 }
 
 function dropNulls(value: unknown, depth: number): void {
