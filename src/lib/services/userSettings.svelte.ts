@@ -290,11 +290,13 @@ function syncUserSettings(unloading: boolean) {
 		syncTimer = undefined;
 	}
 
-	// One at a time. The endpoint replaces the whole row, so two saves in flight
-	// together can land in either order and leave the older one stored — and the
-	// client would believe the newer one had been written. Map moves used to
-	// rewrite the blob and paper over that; they take the position path now.
-	if (syncInFlight && !unloading) {
+	// One at a time, unload included. The endpoint replaces the whole row, so two
+	// saves in flight together can land in either order and leave the older one
+	// stored while the client believes the newer was written. The unload path is
+	// not an exception: visibilitychange fires on an ordinary tab switch, so
+	// exempting it raced exactly like the case this prevents. Whatever is pending
+	// goes out when the current save settles, below.
+	if (syncInFlight) {
 		scheduleSync();
 		return;
 	}
@@ -315,7 +317,7 @@ function syncUserSettings(unloading: boolean) {
 				JSON.parse(payload),
 				unloading,
 				() => {
-					syncInFlight = false;
+					settleSync();
 					lastSyncedUserSettings = undefined;
 					// Re-arm, so the change is retried on the next one or at unload.
 					// Nothing else would resend it: map moves take the position path now,
@@ -324,7 +326,7 @@ function syncUserSettings(unloading: boolean) {
 					else console.warn("Giving up on syncing settings after repeated failures");
 				},
 				() => {
-					syncInFlight = false;
+					settleSync();
 					syncFailures = 0;
 				}
 			);
@@ -346,6 +348,16 @@ function syncUserSettings(unloading: boolean) {
 			() => {}
 		);
 	}
+}
+
+/**
+ * Mark the in-flight save finished and pick up anything queued behind it. Without
+ * this a change made during a save waits for an unrelated edit to carry it, which
+ * for a parked tab can be forever.
+ */
+function settleSync() {
+	syncInFlight = false;
+	if (fullSyncPending || positionSyncPending) scheduleSync();
 }
 
 function post(

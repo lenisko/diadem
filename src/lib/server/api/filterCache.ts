@@ -34,8 +34,14 @@ const MAX_CACHED_FILTER_BYTES = 16 * 1024;
  * evicting after only a few hundred simultaneous visitors. Every eviction costs
  * that client the extra round trip this cache exists to remove, so a public
  * instance that sheds entries constantly is worse off than one with no cache.
+ *
+ * Held once per cache, and there are two, so this is half of the total. Filter
+ * JSON is the small-key shape with the worst decoded-versus-serialized ratio, so
+ * treat the figure as a lower bound on resident memory rather than a measure of
+ * it — roughly a thousand concurrent clients per cache, at several times this
+ * many bytes on the heap.
  */
-const FILTER_CACHE_BYTE_BUDGET = 32 * 1024 * 1024;
+const FILTER_CACHE_BYTE_BUDGET = 16 * 1024 * 1024;
 
 type CachedFilter = { filter: AnyFilter; bytes: number };
 
@@ -63,6 +69,13 @@ function newCache(max: number) {
 
 const authedFilterCache = newCache(FILTER_CACHE_MAX);
 const anonFilterCache = newCache(FILTER_CACHE_MAX);
+
+function deepFreeze<T>(value: T): T {
+	if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+	Object.freeze(value);
+	for (const entry of Object.values(value)) deepFreeze(entry);
+	return value;
+}
 
 function cacheKey(clientKey: string, type: MapObjectType): string {
 	return clientKey + " " + type;
@@ -92,10 +105,12 @@ export function rememberFilter(
 	const bytes = Buffer.byteLength(serialized);
 	if (bytes > MAX_CACHED_FILTER_BYTES) return false;
 
-	// Cache a copy. The stored filter is handed to the query path on every later
-	// poll, so keeping the request's own object would make "nothing downstream
-	// mutates a filter" a silent, load-bearing invariant.
-	const stored = JSON.parse(serialized) as AnyFilter;
+	// Cache a frozen copy. The stored filter is handed to the query path on every
+	// later poll, so a mutation would corrupt it for the rest of its lifetime
+	// rather than for one request. Nothing downstream mutates a filter today;
+	// freezing means a change that starts to will throw where it happens instead
+	// of quietly serving wrong results.
+	const stored = deepFreeze(JSON.parse(serialized)) as AnyFilter;
 
 	const cache = cacheFor(clientKey);
 	const key = cacheKey(clientKey, type);
