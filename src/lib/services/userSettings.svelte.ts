@@ -213,16 +213,73 @@ export function getUserSettings() {
 	return userSettings;
 }
 
+/**
+ * Longest a settings change waits before reaching the server. Every map move
+ * updates the stored position, and the endpoint replaces the whole row, so
+ * without this a pan sends the entire settings blob — filters included — and
+ * writes the database, once per gesture.
+ */
+const SETTINGS_SYNC_DELAY_MS = 2000;
+
+let settingsSyncTimer: ReturnType<typeof setTimeout> | undefined;
+let pendingUserSettings: string | undefined;
+let lastSyncedUserSettings: string | undefined;
+
 export function updateUserSettings() {
 	const serializedUserSettings = JSON.stringify(userSettings);
 
+	// Local first and always: this is what the next page load reads.
 	if (browser && window.localStorage) {
 		localStorage.setItem("userSettings", serializedUserSettings);
 	}
 
-	if (getUserDetails().details) {
-		fetch("/api/user/settings", { method: "POST", body: serializedUserSettings }).then();
-	}
+	if (!getUserDetails().details) return;
+	if (serializedUserSettings === lastSyncedUserSettings) return;
+
+	pendingUserSettings = serializedUserSettings;
+	// A plain trailing debounce would starve while the map is being panned
+	// continuously, so the timer is not restarted — one write per window.
+	if (settingsSyncTimer) return;
+	settingsSyncTimer = setTimeout(syncUserSettings, SETTINGS_SYNC_DELAY_MS);
+}
+
+function syncUserSettings() {
+	settingsSyncTimer = undefined;
+
+	const payload = pendingUserSettings;
+	pendingUserSettings = undefined;
+	if (!payload || payload === lastSyncedUserSettings) return;
+
+	lastSyncedUserSettings = payload;
+	fetch("/api/user/settings", { method: "POST", body: payload })
+		.then((response) => {
+			// Let the next change try again rather than assuming this one landed.
+			if (!response.ok) lastSyncedUserSettings = undefined;
+		})
+		.catch(() => (lastSyncedUserSettings = undefined));
+}
+
+/** Send a pending change immediately, for when the page is going away. */
+function flushUserSettings() {
+	if (!settingsSyncTimer) return;
+	clearTimeout(settingsSyncTimer);
+	settingsSyncTimer = undefined;
+
+	const payload = pendingUserSettings;
+	pendingUserSettings = undefined;
+	if (!payload || payload === lastSyncedUserSettings) return;
+
+	lastSyncedUserSettings = payload;
+	// fetch is cancelled while the page unloads; sendBeacon is not.
+	navigator.sendBeacon?.("/api/user/settings", new Blob([payload], { type: "application/json" }));
+}
+
+if (browser) {
+	// pagehide rather than unload, which is unreliable on mobile Safari.
+	window.addEventListener("pagehide", flushUserSettings);
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "hidden") flushUserSettings();
+	});
 }
 
 function deepMerge(defaultObj: { [key: string]: any }, newObj: { [key: string]: any }) {
