@@ -86,8 +86,11 @@ export function rememberFilter(
 	filter: AnyFilter
 ): boolean {
 	const serialized = JSON.stringify(filter);
-	if (serialized.length > MAX_CACHED_FILTER_BYTES) return false;
-	const bytes = serialized.length;
+	// Bytes, not UTF-16 units: filterset titles are free text, and CJK or emoji
+	// take three to four bytes each, so a "16 KB" filter measured by length can
+	// retain several times that.
+	const bytes = Buffer.byteLength(serialized);
+	if (bytes > MAX_CACHED_FILTER_BYTES) return false;
 
 	// Cache a copy. The stored filter is handed to the query path on every later
 	// poll, so keeping the request's own object would make "nothing downstream

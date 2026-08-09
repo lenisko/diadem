@@ -240,6 +240,8 @@ let fullSyncPending = false;
 let positionSyncPending = false;
 let lastSyncedUserSettings: string | undefined;
 let syncFailures = 0;
+/** A save is on the wire. Overlapping ones can reach the database out of order. */
+let syncInFlight = false;
 
 /** Everything the client keeps locally, regardless of what the server is told. */
 function persistUserSettingsLocally(): string {
@@ -288,6 +290,15 @@ function syncUserSettings(unloading: boolean) {
 		syncTimer = undefined;
 	}
 
+	// One at a time. The endpoint replaces the whole row, so two saves in flight
+	// together can land in either order and leave the older one stored — and the
+	// client would believe the newer one had been written. Map moves used to
+	// rewrite the blob and paper over that; they take the position path now.
+	if (syncInFlight && !unloading) {
+		scheduleSync();
+		return;
+	}
+
 	if (fullSyncPending) {
 		fullSyncPending = false;
 		const payload = JSON.stringify(userSettings);
@@ -298,11 +309,13 @@ function syncUserSettings(unloading: boolean) {
 			lastSyncedUserSettings = payload;
 			// Sent from the serialized form, so what goes over the wire is exactly what
 			// was compared — and free of the reactive proxies the live object is made of.
+			syncInFlight = true;
 			post(
 				SETTINGS_ENDPOINT,
 				JSON.parse(payload),
 				unloading,
 				() => {
+					syncInFlight = false;
 					lastSyncedUserSettings = undefined;
 					// Re-arm, so the change is retried on the next one or at unload.
 					// Nothing else would resend it: map moves take the position path now,
@@ -310,7 +323,10 @@ function syncUserSettings(unloading: boolean) {
 					if (++syncFailures <= MAX_SYNC_FAILURES) fullSyncPending = true;
 					else console.warn("Giving up on syncing settings after repeated failures");
 				},
-				() => (syncFailures = 0)
+				() => {
+					syncInFlight = false;
+					syncFailures = 0;
+				}
 			);
 			return;
 		}

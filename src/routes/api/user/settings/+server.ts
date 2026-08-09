@@ -1,5 +1,6 @@
 import { getUserSettings, setUserSettings } from "@/lib/server/db/internal/repository";
 import { readRequestBody } from "@/lib/server/api/requestBody";
+import { allowSettingsWrite } from "@/lib/server/api/settingsRateLimit";
 import { noStoreHttpHeaders } from "@/lib/utils/apiUtils.server";
 import { json } from "@sveltejs/kit";
 
@@ -16,6 +17,10 @@ export async function POST({ locals, request }) {
 	// synced and would never resend a save that failed on an expired session.
 	if (!locals.user) {
 		return json({ error: "Not logged in" }, { status: 401, headers: noStoreHttpHeaders });
+	}
+
+	if (!(await allowSettingsWrite(locals.user.id))) {
+		return json({ error: "Too many requests" }, { status: 429, headers: noStoreHttpHeaders });
 	}
 
 	let settings: unknown;

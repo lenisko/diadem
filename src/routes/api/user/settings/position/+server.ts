@@ -1,5 +1,6 @@
 import { readRequestBody } from "@/lib/server/api/requestBody";
 import { setUserMapPosition } from "@/lib/server/db/internal/repository";
+import { allowSettingsWrite } from "@/lib/server/api/settingsRateLimit";
 import { noStoreHttpHeaders } from "@/lib/utils/apiUtils.server";
 import { json } from "@sveltejs/kit";
 
@@ -45,6 +46,10 @@ export async function POST({ locals, request }) {
 	// caller keying off response.ok would otherwise record a rejected write.
 	if (!locals.user) {
 		return json({ error: "Not logged in" }, { status: 401, headers: noStoreHttpHeaders });
+	}
+
+	if (!(await allowSettingsWrite(locals.user.id))) {
+		return json({ error: "Too many requests" }, { status: 429, headers: noStoreHttpHeaders });
 	}
 
 	let body: PositionBody;

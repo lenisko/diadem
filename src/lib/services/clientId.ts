@@ -12,6 +12,14 @@ import { getId } from "@/lib/utils/uuid";
  */
 const STORAGE_KEY = "diadem_client_id";
 
+/**
+ * What the server will accept as an id. Defined here and imported there, so the
+ * two cannot drift: an id the server rejects is silently ignored, and every
+ * logged-out visitor behind a proxy collapses onto one cache key — the exact
+ * thing this id exists to prevent.
+ */
+export const CLIENT_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
+
 let clientId: string | undefined;
 
 export function getClientId(): string {
@@ -20,7 +28,8 @@ export function getClientId(): string {
 	if (browser) {
 		try {
 			const stored = sessionStorage.getItem(STORAGE_KEY);
-			if (stored) return (clientId = stored);
+			// Validated, not trusted: anything else on the origin can write here.
+			if (stored && CLIENT_ID_PATTERN.test(stored)) return (clientId = stored);
 		} catch {
 			// Storage can be unavailable or full; an in-memory id still works.
 		}

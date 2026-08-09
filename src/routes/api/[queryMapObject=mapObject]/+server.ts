@@ -36,6 +36,15 @@ const FILTER_HASH_PATTERN = /^[0-9a-z]{1,16}$/;
  */
 const DENIED_CHARGE = 100;
 
+function hasFiniteBounds(data: MapObjectRequestData): boolean {
+	return (
+		Number.isFinite(data.minLat) &&
+		Number.isFinite(data.maxLat) &&
+		Number.isFinite(data.minLon) &&
+		Number.isFinite(data.maxLon)
+	);
+}
+
 export const POST: RequestHandler = async (event) => {
 	const { request, locals, params, getClientAddress } = event;
 	const rateLimitKey = locals.user?.id ?? getClientAddress();
@@ -88,8 +97,9 @@ export const POST: RequestHandler = async (event) => {
 		error(400);
 	}
 	// A valid msgpack body can still be a scalar, and reading a field off it
-	// would throw out of the handler as a 500.
-	if (!data || typeof data !== "object" || Array.isArray(data)) {
+	// would throw out of the handler as a 500. The bounds get the same treatment:
+	// they are the query, and an absent one reaches the driver as undefined.
+	if (!data || typeof data !== "object" || Array.isArray(data) || !hasFiniteBounds(data)) {
 		await refund(DENIED_CHARGE);
 		error(400);
 	}
