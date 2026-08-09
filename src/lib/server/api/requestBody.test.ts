@@ -50,4 +50,31 @@ describe("readRequestBody", () => {
 		const request = msgpackRequest({ since: 1700000000 }, { ignoreUndefined: true });
 		expect((await readRequestBody<{ since?: number }>(request)).since).toBe(1700000000);
 	});
+
+	it("keeps explicit nulls in json bodies", async () => {
+		const request = new Request("http://localhost/api/pokemon", {
+			method: "POST",
+			body: JSON.stringify({ filter: null }),
+			headers: { "Content-Type": "application/json" }
+		});
+		expect((await readRequestBody<{ filter: unknown }>(request)).filter).toBeNull();
+	});
+
+	// A five-byte body declaring a 33M-element array allocated ~257 MB before
+	// failing, because msgpack sizes the collection before reading any element.
+	it("rejects an oversized declared length without allocating for it", async () => {
+		const request = new Request("http://localhost/api/pokemon", {
+			method: "POST",
+			body: new Uint8Array([0xdd, 0x01, 0xff, 0xff, 0xff]),
+			headers: { "Content-Type": "application/msgpack" }
+		});
+		await expect(readRequestBody(request)).rejects.toThrow(/maxArrayLength/);
+	});
+
+	it("rejects a body nested past the depth limit", async () => {
+		// Below the encoder's own depth cap of 100, above the reader's limit of 64.
+		let nested: unknown = 1;
+		for (let i = 0; i < 80; i++) nested = { a: nested };
+		await expect(readRequestBody(msgpackRequest(nested))).rejects.toThrow(/nested too deeply/);
+	});
 });

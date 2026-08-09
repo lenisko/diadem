@@ -24,8 +24,13 @@ const MAX_CACHED_FILTER_BYTES = 16 * 1024;
  * Total retained filter bytes. Entry counts alone don't bound this: filters are
  * arbitrary client JSON held for the full TTL, so the count ceiling times the
  * per-filter ceiling is gigabytes. Oldest keys are evicted to stay under it.
+ *
+ * Measured as serialized length, while what is retained is the decoded object
+ * graph — several times larger in the heap for small-key JSON. The budget is set
+ * low with that multiplier in mind, and it is per process, so a clustered
+ * deployment holds one budget per worker.
  */
-const FILTER_CACHE_BYTE_BUDGET = 64 * 1024 * 1024;
+const FILTER_CACHE_BYTE_BUDGET = 8 * 1024 * 1024;
 
 type CachedFilter = { filter: AnyFilter; bytes: number };
 

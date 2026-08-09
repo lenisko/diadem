@@ -23,6 +23,16 @@ import type { RequestHandler } from "./$types";
 
 const log = getLogger("mapobjects");
 
+/** Shape of getFilterHash's output; anything else never matches a cache entry. */
+const FILTER_HASH_PATTERN = /^[0-9a-z]{1,16}$/;
+
+/**
+ * Charged when a client polls with a hash the server doesn't hold. Small — it is
+ * a real part of the protocol — but not nothing, so it can't be used to bypass
+ * the limiter entirely.
+ */
+const FILTER_CONFLICT_CHARGE = 100;
+
 export const POST: RequestHandler = async (event) => {
 	const { request, locals, params, getClientAddress } = event;
 	const rateLimitKey = locals.user?.id ?? getClientAddress();
@@ -40,15 +50,28 @@ export const POST: RequestHandler = async (event) => {
 
 	// Clients poll with a filter hash instead of the whole filter. Ask for a
 	// full resend whenever the cached copy is missing or stale.
+	const filterHash = FILTER_HASH_PATTERN.test(data.filterHash ?? "") ? data.filterHash : undefined;
 	let filter: AnyFilter | undefined = data.filter;
-	let uncacheable = false;
-	if (data.filterHash) {
+	// Carried on every response, including the failures: a client that never
+	// learns its filter is uncacheable retries by hash forever, doubling its
+	// request rate exactly when the server is shedding load.
+	let extraHeaders: Record<string, string> | undefined;
+	if (filterHash) {
 		if (filter) {
-			uncacheable = !rememberFilter(filterKey, type, data.filterHash, filter);
+			if (!rememberFilter(filterKey, type, filterHash, filter)) {
+				extraHeaders = { "X-Filter-Cached": "0" };
+			}
 		} else {
-			filter = recallFilter(filterKey, type, data.filterHash);
+			filter = recallFilter(filterKey, type, filterHash);
 			if (!filter) {
-				return respond(request, { data: [] }, { status: constants.HTTP_STATUS_CONFLICT });
+				// Not free: otherwise a random hash buys an unlimited run of requests
+				// that skip the limiter entirely.
+				await rateLimit(rateLimitKey, FILTER_CONFLICT_CHARGE, type);
+				return respond(
+					request,
+					{ data: [] },
+					{ headers: extraHeaders, status: constants.HTTP_STATUS_CONFLICT }
+				);
 			}
 		}
 	}
@@ -56,7 +79,11 @@ export const POST: RequestHandler = async (event) => {
 	const permitted = checkFeaturesInBounds(locals.perms, family, data);
 
 	if (!permitted) {
-		return respond(request, { data: [] }, { status: constants.HTTP_STATUS_UNAUTHORIZED });
+		return respond(
+			request,
+			{ data: [] },
+			{ headers: extraHeaders, status: constants.HTTP_STATUS_UNAUTHORIZED }
+		);
 	}
 
 	const permissionContext = new FeaturePermissionContext(locals.perms, family);
@@ -78,7 +105,7 @@ export const POST: RequestHandler = async (event) => {
 		return respond(
 			request,
 			{ data: [] },
-			{ headers, status: constants.HTTP_STATUS_TOO_MANY_REQUESTS }
+			{ headers: { ...headers, ...extraHeaders }, status: constants.HTTP_STATUS_TOO_MANY_REQUESTS }
 		);
 	}
 
@@ -110,13 +137,7 @@ export const POST: RequestHandler = async (event) => {
 	}
 
 	const queryTime = performance.now();
-	// Tell the client not to poll this filter by hash: it is too large to cache,
-	// so every hash-only attempt would 409 and cost a second round trip.
-	const response = respond(
-		request,
-		result,
-		uncacheable ? { headers: { "X-Filter-Cached": "0" } } : undefined
-	);
+	const response = respond(request, result, extraHeaders ? { headers: extraHeaders } : undefined);
 	const serializeTime = performance.now();
 
 	log.info(

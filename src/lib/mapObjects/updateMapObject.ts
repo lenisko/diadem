@@ -46,6 +46,14 @@ const STATUS_FILTER_UNKNOWN = 409;
  */
 const uncacheableFilterHashes = new Set<string>();
 
+/**
+ * Hashes the server has answered for. A filter it has never seen is sent in
+ * full the first time — asking by hash first would 409 and resend, so every
+ * page load and every filter edit would cost two serialized requests per type
+ * on the most latency-sensitive path there is.
+ */
+const knownFilterHashes = new Set<string>();
+
 let currentController: AbortController | undefined;
 const lastQueryTimestamps = new SvelteMap<MapObjectType, number>();
 
@@ -62,6 +70,10 @@ export function clearMap() {
 	clearAllMapObjects();
 	resetLastQueryTimestamps();
 	clearAllDataLimits();
+	// What the server holds for us is no longer worth assuming after a reset,
+	// and these would otherwise grow for the life of the page.
+	knownFilterHashes.clear();
+	uncacheableFilterHashes.clear();
 	updateFeatures(getMapObjects());
 }
 
@@ -92,16 +104,27 @@ export async function fetchMapObjects<T extends MapData>(
 	}
 
 	try {
-		// Poll without the filter body and resend it only when the server's cached
-		// copy is missing or stale.
-		const sendFilter = filterHash === undefined || uncacheableFilterHashes.has(filterHash);
+		// Send the filter the first time it is used and whenever the server won't
+		// cache it; poll by hash alone once the server is known to hold it.
+		const sendFilter =
+			filterHash === undefined ||
+			!knownFilterHashes.has(filterHash) ||
+			uncacheableFilterHashes.has(filterHash);
+
 		let response = await post(sendFilter);
+		// The server dropped it — a restart, the cache expiring, or another process
+		// in a multi-worker deployment that has not seen this filter yet.
 		if (response.status === STATUS_FILTER_UNKNOWN) {
 			response = await post(true);
 		}
 
-		if (filterHash !== undefined && response.headers.get("X-Filter-Cached") === "0") {
-			uncacheableFilterHashes.add(filterHash);
+		if (filterHash !== undefined && response.ok) {
+			if (response.headers.get("X-Filter-Cached") === "0") {
+				uncacheableFilterHashes.add(filterHash);
+				knownFilterHashes.delete(filterHash);
+			} else {
+				knownFilterHashes.add(filterHash);
+			}
 		}
 
 		return await parseResponse<MapObjectResponse<T>>(response);
