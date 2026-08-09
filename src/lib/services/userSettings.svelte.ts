@@ -226,11 +226,20 @@ const POSITION_ENDPOINT = "/api/user/settings/position";
 /** The Fetch spec rejects a keepalive request whose body exceeds this. */
 const KEEPALIVE_MAX_BYTES = 64 * 1024;
 
+/**
+ * Consecutive failed saves before the retry stops re-arming itself. Some
+ * failures never resolve — a blob past the server's body limit is refused every
+ * time — and retrying one of those on every change achieves nothing. A later
+ * edit starts the count over, so a transient outage still recovers.
+ */
+const MAX_SYNC_FAILURES = 3;
+
 let syncTimer: ReturnType<typeof setTimeout> | undefined;
 /** Something other than the map position changed, so the whole object must go. */
 let fullSyncPending = false;
 let positionSyncPending = false;
 let lastSyncedUserSettings: string | undefined;
+let syncFailures = 0;
 
 /** Everything the client keeps locally, regardless of what the server is told. */
 function persistUserSettingsLocally(): string {
@@ -286,13 +295,20 @@ function syncUserSettings(unloading: boolean) {
 			lastSyncedUserSettings = payload;
 			// Sent from the serialized form, so what goes over the wire is exactly what
 			// was compared — and free of the reactive proxies the live object is made of.
-			post(SETTINGS_ENDPOINT, JSON.parse(payload), unloading, () => {
-				lastSyncedUserSettings = undefined;
-				// Re-arm, so the change is retried on the next one or at unload.
-				// Nothing else would resend it: map moves take the position path now,
-				// where before this they rewrote the whole object and healed it.
-				fullSyncPending = true;
-			});
+			post(
+				SETTINGS_ENDPOINT,
+				JSON.parse(payload),
+				unloading,
+				() => {
+					lastSyncedUserSettings = undefined;
+					// Re-arm, so the change is retried on the next one or at unload.
+					// Nothing else would resend it: map moves take the position path now,
+					// where before this they rewrote the whole object and healed it.
+					if (++syncFailures <= MAX_SYNC_FAILURES) fullSyncPending = true;
+					else console.warn("Giving up on syncing settings after repeated failures");
+				},
+				() => (syncFailures = 0)
+			);
 			return;
 		}
 		// Nothing to write after all — fall through, so a position queued behind
@@ -313,7 +329,13 @@ function syncUserSettings(unloading: boolean) {
 	}
 }
 
-function post(url: string, body: unknown, unloading: boolean, onFailure: () => void) {
+function post(
+	url: string,
+	body: unknown,
+	unloading: boolean,
+	onFailure: () => void,
+	onSuccess: () => void = () => {}
+) {
 	// msgpack where the platform allows it; the helper falls back to JSON on
 	// native, where the CapacitorHttp wrapper would corrupt a binary body.
 	const encoded = encodeRequestBody(body);
@@ -341,6 +363,7 @@ function post(url: string, body: unknown, unloading: boolean, onFailure: () => v
 			const failed = !response.ok || Boolean((await response.json().catch(() => null))?.error);
 			// Let the next change try again rather than assuming this one landed.
 			if (failed) onFailure();
+			else onSuccess();
 		})
 		.catch(onFailure);
 }

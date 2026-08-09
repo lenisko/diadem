@@ -4,11 +4,12 @@ import { noStoreHttpHeaders } from "@/lib/utils/apiUtils.server";
 import { json } from "@sveltejs/kit";
 
 /**
- * Settings carry every filter, filterset and recent search, so they need far
- * more headroom than a map object poll. Past this a client would stop syncing
- * with nothing to show for it, so keep it generous.
+ * Settings carry every filter, filterset and recent search, so they are the
+ * largest thing a client sends. The ceiling is adapter-node's BODY_SIZE_LIMIT
+ * (512K by default), which rejects a larger body before this handler runs;
+ * an instance whose users outgrow that has to raise the env var.
  */
-const MAX_SETTINGS_BYTES = 2 * 1024 * 1024;
+const MAX_SETTINGS_BYTES = 512 * 1024;
 
 export async function POST({ locals, request }) {
 	// 401, not a 200 with an error body: the client records an ok response as

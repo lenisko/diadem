@@ -40,14 +40,20 @@ export type MapObjectRequestData = Bounds & {
 const STATUS_FILTER_UNKNOWN = 409;
 
 /**
- * Hashes not worth asking about by hash at all, so the filter goes out in full
- * from the start. Either the server said it is too large to cache, or asking has
- * repeatedly come back as a miss — which is what a multi-process deployment
- * without sticky routing looks like, since each process caches separately.
- * Without this, those clients would pay two requests per poll forever: strictly
- * worse than sending the filter every time, which is what this avoids.
+ * Hashes to stop asking about, because asking has repeatedly come back as a
+ * miss — which is what a multi-process deployment without sticky routing looks
+ * like, since each process caches separately. The filter goes out in full, but
+ * the hash still goes with it so the process that answers can cache it.
  */
 const alwaysSendFilterHashes = new Set<string>();
+
+/**
+ * Hashes the server has said it will never cache, because the filter is too
+ * large. The hash is left out of the request entirely for these: sending it
+ * would only make the server hash and serialize the filter again on every poll
+ * to reach the same conclusion, and throw both away.
+ */
+const uncacheableFilterHashes = new Set<string>();
 
 /**
  * Hashes the server has answered for. A filter it has never seen is sent in
@@ -93,6 +99,7 @@ export function clearMap() {
 	// and these would otherwise grow for the life of the page.
 	knownFilterHashes.clear();
 	alwaysSendFilterHashes.clear();
+	uncacheableFilterHashes.clear();
 	filterHashMisses.clear();
 	updateFeatures(getMapObjects());
 }
@@ -105,7 +112,10 @@ export async function fetchMapObjects<T extends MapData>(
 	since?: number
 ): Promise<MapObjectResponse<T> | undefined> {
 	const currentBounds = getBounds();
-	const filterHash = getFilterHash(filter);
+	const hash = getFilterHash(filter);
+	// Omitted when the server has told us it won't cache this filter, so it does
+	// no hashing work for an answer both sides already know.
+	const filterHash = hash !== undefined && uncacheableFilterHashes.has(hash) ? undefined : hash;
 
 	async function post(withFilter: boolean): Promise<Response> {
 		const body: MapObjectRequestData = {
@@ -136,6 +146,8 @@ export async function fetchMapObjects<T extends MapData>(
 		// in a multi-worker deployment that has not seen this filter yet.
 		if (response.status === STATUS_FILTER_UNKNOWN) {
 			if (filterHash !== undefined) recordFilterHashMiss(filterHash);
+			// The 409 body is never read; leaving it open holds its connection.
+			await response.body?.cancel();
 			response = await post(true);
 			// The retry succeeding says nothing about whether hashing works here,
 			// so the run of misses stands until a hash-only poll is answered.
@@ -147,15 +159,15 @@ export async function fetchMapObjects<T extends MapData>(
 			filterHashMisses.delete(filterHash);
 		}
 
-		if (filterHash !== undefined) {
+		if (hash !== undefined) {
 			// Checked on any response rather than only a success. The server can
 			// only produce it alongside one today, but reading it unconditionally
 			// costs nothing and does not go stale if that changes.
 			if (response.headers.get("X-Filter-Cached") === "0") {
-				alwaysSendFilterHashes.add(filterHash);
-				knownFilterHashes.delete(filterHash);
-			} else if (response.ok) {
-				knownFilterHashes.add(filterHash);
+				uncacheableFilterHashes.add(hash);
+				knownFilterHashes.delete(hash);
+			} else if (response.ok && filterHash !== undefined) {
+				knownFilterHashes.add(hash);
 			}
 		}
 
