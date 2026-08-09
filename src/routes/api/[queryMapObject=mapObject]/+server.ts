@@ -2,6 +2,7 @@ import type { AnyFilter } from "@/lib/features/filters/filters";
 import { MapObjectType } from "@/lib/mapObjects/mapObjectTypes";
 import type { MapObjectRequestData } from "@/lib/mapObjects/updateMapObject";
 import { getClientIdentity } from "@/lib/server/api/clientIdentity";
+import { getFilterHash } from "@/lib/utils/filterHash";
 import { recallFilter, rememberFilter } from "@/lib/server/api/filterCache";
 import { readRequestBody } from "@/lib/server/api/requestBody";
 import {
@@ -27,11 +28,13 @@ const log = getLogger("mapobjects");
 const FILTER_HASH_PATTERN = /^[0-9a-z]{1,16}$/;
 
 /**
- * Charged when a client polls with a hash the server doesn't hold. Small — it is
- * a real part of the protocol — but not nothing, so it can't be used to bypass
- * the limiter entirely.
+ * Charged for a request that is answered without a query — a bad body, bounds
+ * outside every permitted area, a hash the server doesn't hold. Small, since an
+ * unresolved hash is a real part of the protocol, but never zero: each of these
+ * still costs a body read, a decode and a permission check, and a free one can
+ * be looped indefinitely.
  */
-const FILTER_CONFLICT_CHARGE = 100;
+const DENIED_CHARGE = 100;
 
 export const POST: RequestHandler = async (event) => {
 	const { request, locals, params, getClientAddress } = event;
@@ -81,8 +84,23 @@ export const POST: RequestHandler = async (event) => {
 	} catch {
 		// Malformed, oversized or over-nested body. A 500 with a stack is the wrong
 		// shape for what is simply a bad request.
-		await refund(FILTER_CONFLICT_CHARGE);
+		await refund(DENIED_CHARGE);
 		error(400);
+	}
+	// A valid msgpack body can still be a scalar, and reading a field off it
+	// would throw out of the handler as a 500.
+	if (!data || typeof data !== "object" || Array.isArray(data)) {
+		await refund(DENIED_CHARGE);
+		error(400);
+	}
+
+	// Ahead of anything that writes to the cache: a request for somewhere this
+	// client can't see must not be able to fill the cache, or evict from it.
+	const permitted = checkFeaturesInBounds(locals.perms, family, data);
+
+	if (!permitted) {
+		await refund(DENIED_CHARGE);
+		return respond(request, { data: [] }, { status: constants.HTTP_STATUS_UNAUTHORIZED });
 	}
 
 	// Clients poll with a filter hash instead of the whole filter. Ask for a
@@ -95,29 +113,21 @@ export const POST: RequestHandler = async (event) => {
 	let extraHeaders: Record<string, string> | undefined;
 	if (filterHash) {
 		if (filter) {
-			if (!rememberFilter(filterKey, type, filterHash, filter)) {
-				extraHeaders = { "X-Filter-Cached": "0" };
-			}
+			// The hash has to be the one this filter actually produces, or a client
+			// could store an arbitrary filter under someone else's hash and change
+			// what they see on their next hash-only poll.
+			const cached =
+				getFilterHash(filter) === filterHash && rememberFilter(filterKey, type, filterHash, filter);
+			if (!cached) extraHeaders = { "X-Filter-Cached": "0" };
 		} else {
 			filter = recallFilter(filterKey, type, filterHash);
 			if (!filter) {
 				// Charged, not free: a random hash would otherwise buy an unbounded
 				// run of requests that each pay a body read and a compressed response.
-				await refund(FILTER_CONFLICT_CHARGE);
+				await refund(DENIED_CHARGE);
 				return respond(request, { data: [] }, { status: constants.HTTP_STATUS_CONFLICT });
 			}
 		}
-	}
-
-	const permitted = checkFeaturesInBounds(locals.perms, family, data);
-
-	if (!permitted) {
-		await refund(0);
-		return respond(
-			request,
-			{ data: [] },
-			{ headers: extraHeaders, status: constants.HTTP_STATUS_UNAUTHORIZED }
-		);
 	}
 
 	const permissionContext = new FeaturePermissionContext(locals.perms, family);

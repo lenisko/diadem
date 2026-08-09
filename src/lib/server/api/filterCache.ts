@@ -39,11 +39,12 @@ let cachedBytes = 0;
 const filterCache = new TTLCache<string, Map<string, CachedFilter>>({
 	ttl: FILTER_CACHE_TTL,
 	max: FILTER_CACHE_MAX,
-	// A client polling by hash never re-sends the filter, so without this its
-	// entry expires the TTL after the last full send and it pays a 409 plus a
-	// full resend for every type, every TTL, for the life of the session.
-	updateAgeOnGet: true,
+	// Never updateAgeOnGet: it makes get() register an expiry for a key it did
+	// not find, and that phantom then reaches dispose with no value — and is
+	// invisible to `max`, which only counts entries that exist. The TTL is
+	// refreshed explicitly on a hit instead, in recallFilter.
 	dispose: (filters) => {
+		if (!filters) return;
 		for (const entry of filters.values()) cachedBytes -= entry.bytes;
 	}
 });
@@ -105,7 +106,8 @@ export function recallFilter(
 	type: MapObjectType,
 	hash: string
 ): AnyFilter | undefined {
-	const filters = filterCache.get(cacheKey(clientKey, type));
+	const key = cacheKey(clientKey, type);
+	const filters = filterCache.get(key);
 	const entry = filters?.get(hash);
 	if (!filters || !entry) return undefined;
 
@@ -113,5 +115,10 @@ export function recallFilter(
 	// this key fills up, rather than the first because it was inserted earliest.
 	filters.delete(hash);
 	filters.set(hash, entry);
+	// A client polling by hash never re-sends the filter, so without this the
+	// entry expires a TTL after the last full send and every type pays a 409
+	// plus a resend, every TTL, for the life of the session. Only ever on a hit:
+	// setTTL for an absent key creates the same phantom entry get() would.
+	filterCache.setTTL(key, FILTER_CACHE_TTL);
 	return entry.filter;
 }

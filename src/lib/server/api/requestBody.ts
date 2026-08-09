@@ -22,6 +22,12 @@ const DECODE_LIMITS = {
 const MAX_DEPTH = 64;
 
 /**
+ * Raw bytes buffered before decoding. The decode ceilings above can't apply
+ * until the whole body is in memory, so this is what actually bounds that.
+ */
+const MAX_BODY_BYTES = 256 * 1024;
+
+/**
  * Read a request body as msgpack or JSON, depending on its Content-Type.
  * Clients send msgpack where they can — it is roughly half the size of the
  * equivalent JSON and request bodies are never compressed by the browser.
@@ -29,9 +35,17 @@ const MAX_DEPTH = 64;
 export async function readRequestBody<T>(request: Request): Promise<T> {
 	const contentType = request.headers.get("Content-Type") ?? "";
 
+	const declared = Number(request.headers.get("Content-Length"));
+	if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+		throw new Error("Request body too large");
+	}
+
 	if (!contentType.includes("application/msgpack")) return (await request.json()) as T;
 
-	const body = decode(new Uint8Array(await request.arrayBuffer()), DECODE_LIMITS);
+	const raw = new Uint8Array(await request.arrayBuffer());
+	if (raw.byteLength > MAX_BODY_BYTES) throw new Error("Request body too large");
+
+	const body = decode(raw, DECODE_LIMITS);
 
 	// msgpack has no undefined, so an absent optional field arrives as null and
 	// would defeat `!== undefined` guards such as the `since` delta cursor. Only

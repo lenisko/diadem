@@ -8,7 +8,11 @@
 /**
  * JSON.stringify with deterministic key order, so two structurally equal
  * filters always produce the same string regardless of insertion order.
- * Undefined values are dropped, matching JSON.stringify semantics.
+ *
+ * Null and undefined properties are both dropped. Undefined matches
+ * JSON.stringify; null is dropped because msgpack has no undefined, so a field
+ * the client left unset arrives as null and the server strips it — hashing it
+ * here would describe a filter the server never stores.
  */
 export function stableStringify(value: unknown): string {
 	if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -21,7 +25,7 @@ export function stableStringify(value: unknown): string {
 	const parts: string[] = [];
 	for (const key of Object.keys(record).sort()) {
 		const entry = record[key];
-		if (entry === undefined) continue;
+		if (entry === undefined || entry === null) continue;
 		parts.push(JSON.stringify(key) + ":" + stableStringify(entry));
 	}
 	return "{" + parts.join(",") + "}";

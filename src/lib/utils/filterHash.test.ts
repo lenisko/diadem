@@ -15,6 +15,12 @@ describe("stableStringify", () => {
 		expect(stableStringify({ a: 1, b: undefined })).toBe(stableStringify({ a: 1 }));
 	});
 
+	// The server strips nulls when reading a msgpack body, since msgpack encodes
+	// an unset field as nil. Hashing one would name a filter it never stores.
+	it("drops null properties, matching what the server keeps", () => {
+		expect(stableStringify({ a: 1, b: null })).toBe(stableStringify({ a: 1 }));
+	});
+
 	it("sorts nested keys", () => {
 		expect(stableStringify({ x: { b: 1, a: [{ d: 1, c: 2 }] } })).toBe(
 			'{"x":{"a":[{"c":2,"d":1}],"b":1}}'

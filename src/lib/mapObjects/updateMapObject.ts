@@ -137,7 +137,12 @@ export async function fetchMapObjects<T extends MapData>(
 		if (response.status === STATUS_FILTER_UNKNOWN) {
 			if (filterHash !== undefined) recordFilterHashMiss(filterHash);
 			response = await post(true);
-		} else if (filterHash !== undefined) {
+			// The retry succeeding says nothing about whether hashing works here,
+			// so the run of misses stands until a hash-only poll is answered.
+		} else if (filterHash !== undefined && !sendFilter) {
+			// Only a hash-only poll that worked proves the miss run is over. Counting
+			// total misses instead would retire a hash after three unrelated server
+			// restarts across the life of a long-lived tab.
 			filterHashMisses.delete(filterHash);
 		}
 
