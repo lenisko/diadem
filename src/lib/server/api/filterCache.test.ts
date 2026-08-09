@@ -85,6 +85,19 @@ describe("filterCache", () => {
 		expect(recallFilter(user, MapObjectType.POKEMON, "mine")).toEqual(filter("mine"));
 	});
 
+	// The cached object is handed to the query path on every later poll, so a
+	// mutation would outlive the request that made it.
+	it("hands back a filter that cannot be mutated", () => {
+		const key = client();
+		rememberFilter(key, MapObjectType.POKEMON, "h", filter("a"));
+		const recalled = recallFilter(key, MapObjectType.POKEMON, "h") as unknown as {
+			filters: { id: string }[];
+		};
+
+		expect(() => (recalled.filters[0]!.id = "mutated")).toThrow(TypeError);
+		expect(recalled.filters[0]!.id).toBe("a");
+	});
+
 	it("refuses to cache an oversized filter", () => {
 		const key = client();
 		const huge = {

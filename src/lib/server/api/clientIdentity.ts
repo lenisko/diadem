@@ -1,7 +1,8 @@
 import type { RequestEvent } from "@sveltejs/kit";
 
+import { CLIENT_ID_PATTERN } from "@/lib/services/clientId";
+
 const CLIENT_ID_HEADER = "X-Client-Id";
-const CLIENT_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
 
 /**
  * Identifies the browser a request came from, for per-client server-side state

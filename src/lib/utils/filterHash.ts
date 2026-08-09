@@ -9,13 +9,25 @@
  * JSON.stringify with deterministic key order, so two structurally equal
  * filters always produce the same string regardless of insertion order.
  *
- * Null and undefined properties are both dropped. Undefined matches
+ * Null, undefined and non-finite properties are all dropped. Undefined matches
  * JSON.stringify; null is dropped because msgpack has no undefined, so a field
  * the client left unset arrives as null and the server strips it — hashing it
  * here would describe a filter the server never stores.
+ *
+ * Infinity gets the same treatment for the same reason: JSON has no way to
+ * write it, so a filter carrying one (an open-ended quest range, say) reaches
+ * the server as null over JSON and as a real infinity over msgpack. Ignoring it
+ * on both sides is what keeps the two hashes equal.
  */
+function isHashable(value: unknown): boolean {
+	if (value === undefined || value === null) return false;
+	return typeof value !== "number" || Number.isFinite(value);
+}
+
 export function stableStringify(value: unknown): string {
-	if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+	if (value === null || typeof value !== "object") {
+		return isHashable(value) ? (JSON.stringify(value) ?? "null") : "null";
+	}
 
 	if (Array.isArray(value)) {
 		return "[" + value.map((item) => stableStringify(item)).join(",") + "]";
@@ -25,7 +37,7 @@ export function stableStringify(value: unknown): string {
 	const parts: string[] = [];
 	for (const key of Object.keys(record).sort()) {
 		const entry = record[key];
-		if (entry === undefined || entry === null) continue;
+		if (!isHashable(entry)) continue;
 		parts.push(JSON.stringify(key) + ":" + stableStringify(entry));
 	}
 	return "{" + parts.join(",") + "}";

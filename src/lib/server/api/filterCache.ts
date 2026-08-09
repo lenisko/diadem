@@ -26,11 +26,22 @@ const MAX_CACHED_FILTER_BYTES = 16 * 1024;
  * per-filter ceiling is gigabytes. Oldest keys are evicted to stay under it.
  *
  * Measured as serialized length, while what is retained is the decoded object
- * graph — several times larger in the heap for small-key JSON. The budget is set
- * low with that multiplier in mind, and it is per process, so a clustered
- * deployment holds one budget per worker.
+ * graph — several times larger in the heap for small-key JSON — and held per
+ * cache, so a clustered deployment keeps one budget per worker.
+ *
+ * Sized for concurrency, not just for safety: a client retains a few tens of KB
+ * across its map object types, so a budget in the single-digit MB starts
+ * evicting after only a few hundred simultaneous visitors. Every eviction costs
+ * that client the extra round trip this cache exists to remove, so a public
+ * instance that sheds entries constantly is worse off than one with no cache.
+ *
+ * Held once per cache, and there are two, so this is half of the total. Filter
+ * JSON is the small-key shape with the worst decoded-versus-serialized ratio, so
+ * treat the figure as a lower bound on resident memory rather than a measure of
+ * it — roughly a thousand concurrent clients per cache, at several times this
+ * many bytes on the heap.
  */
-const FILTER_CACHE_BYTE_BUDGET = 8 * 1024 * 1024;
+const FILTER_CACHE_BYTE_BUDGET = 16 * 1024 * 1024;
 
 type CachedFilter = { filter: AnyFilter; bytes: number };
 
@@ -59,6 +70,13 @@ function newCache(max: number) {
 const authedFilterCache = newCache(FILTER_CACHE_MAX);
 const anonFilterCache = newCache(FILTER_CACHE_MAX);
 
+function deepFreeze<T>(value: T): T {
+	if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+	Object.freeze(value);
+	for (const entry of Object.values(value)) deepFreeze(entry);
+	return value;
+}
+
 function cacheKey(clientKey: string, type: MapObjectType): string {
 	return clientKey + " " + type;
 }
@@ -81,13 +99,18 @@ export function rememberFilter(
 	filter: AnyFilter
 ): boolean {
 	const serialized = JSON.stringify(filter);
-	if (serialized.length > MAX_CACHED_FILTER_BYTES) return false;
-	const bytes = serialized.length;
+	// Bytes, not UTF-16 units: filterset titles are free text, and CJK or emoji
+	// take three to four bytes each, so a "16 KB" filter measured by length can
+	// retain several times that.
+	const bytes = Buffer.byteLength(serialized);
+	if (bytes > MAX_CACHED_FILTER_BYTES) return false;
 
-	// Cache a copy. The stored filter is handed to the query path on every later
-	// poll, so keeping the request's own object would make "nothing downstream
-	// mutates a filter" a silent, load-bearing invariant.
-	const stored = JSON.parse(serialized) as AnyFilter;
+	// Cache a frozen copy. The stored filter is handed to the query path on every
+	// later poll, so a mutation would corrupt it for the rest of its lifetime
+	// rather than for one request. Nothing downstream mutates a filter today;
+	// freezing means a change that starts to will throw where it happens instead
+	// of quietly serving wrong results.
+	const stored = deepFreeze(JSON.parse(serialized)) as AnyFilter;
 
 	const cache = cacheFor(clientKey);
 	const key = cacheKey(clientKey, type);

@@ -40,14 +40,20 @@ export type MapObjectRequestData = Bounds & {
 const STATUS_FILTER_UNKNOWN = 409;
 
 /**
- * Hashes not worth asking about by hash at all, so the filter goes out in full
- * from the start. Either the server said it is too large to cache, or asking has
- * repeatedly come back as a miss — which is what a multi-process deployment
- * without sticky routing looks like, since each process caches separately.
- * Without this, those clients would pay two requests per poll forever: strictly
- * worse than sending the filter every time, which is what this avoids.
+ * Hashes to stop asking about, because asking has repeatedly come back as a
+ * miss — which is what a multi-process deployment without sticky routing looks
+ * like, since each process caches separately. The filter goes out in full, but
+ * the hash still goes with it so the process that answers can cache it.
  */
 const alwaysSendFilterHashes = new Set<string>();
+
+/**
+ * Hashes the server has said it will never cache, because the filter is too
+ * large. The hash is left out of the request entirely for these: sending it
+ * would only make the server hash and serialize the filter again on every poll
+ * to reach the same conclusion, and throw both away.
+ */
+const uncacheableFilterHashes = new Set<string>();
 
 /**
  * Hashes the server has answered for. A filter it has never seen is sent in
@@ -60,6 +66,15 @@ const knownFilterHashes = new Set<string>();
 /** Consecutive misses per hash, and how many are tolerated before giving up on it. */
 const filterHashMisses = new Map<string, number>();
 const MAX_FILTER_HASH_MISSES = 3;
+
+/**
+ * The server caches per (client, map object type, hash), so this bookkeeping is
+ * keyed the same way. Sharing an entry between types would let a hit for one
+ * send the other hash-only into a 409, and let that miss count against both.
+ */
+function hashKey(type: MapObjectType, hash: string): string {
+	return type + " " + hash;
+}
 
 let currentController: AbortController | undefined;
 const lastQueryTimestamps = new SvelteMap<MapObjectType, number>();
@@ -93,6 +108,7 @@ export function clearMap() {
 	// and these would otherwise grow for the life of the page.
 	knownFilterHashes.clear();
 	alwaysSendFilterHashes.clear();
+	uncacheableFilterHashes.clear();
 	filterHashMisses.clear();
 	updateFeatures(getMapObjects());
 }
@@ -105,13 +121,22 @@ export async function fetchMapObjects<T extends MapData>(
 	since?: number
 ): Promise<MapObjectResponse<T> | undefined> {
 	const currentBounds = getBounds();
-	const filterHash = getFilterHash(filter);
+	const hash = getFilterHash(filter);
+	const key = hash === undefined ? undefined : hashKey(type, hash);
+	// Omitted when the server has told us it won't cache this filter, so it does
+	// no hashing work for an answer both sides already know.
+	const filterHash = key !== undefined && uncacheableFilterHashes.has(key) ? undefined : hash;
 
 	async function post(withFilter: boolean): Promise<Response> {
+		// Re-hashed at send time when the filter goes with it. `filter` is the live
+		// reactive object, so a user editing it during a 409 round trip would
+		// otherwise have the retry carry the new filter under the old hash — the
+		// server rejects that pairing and the client concludes, permanently, that
+		// the filter cannot be cached.
 		const body: MapObjectRequestData = {
 			...currentBounds,
 			filter: withFilter ? filter : undefined,
-			filterHash,
+			filterHash: withFilter ? getFilterHash(filter) : filterHash,
 			since
 		};
 		const encoded = encodeRequestBody(body);
@@ -128,33 +153,37 @@ export async function fetchMapObjects<T extends MapData>(
 		// proven not to work; poll by hash alone once the server is known to hold it.
 		const sendFilter =
 			filterHash === undefined ||
-			!knownFilterHashes.has(filterHash) ||
-			alwaysSendFilterHashes.has(filterHash);
+			key === undefined ||
+			!knownFilterHashes.has(key) ||
+			alwaysSendFilterHashes.has(key);
 
 		let response = await post(sendFilter);
 		// The server dropped it — a restart, the cache expiring, or another process
 		// in a multi-worker deployment that has not seen this filter yet.
 		if (response.status === STATUS_FILTER_UNKNOWN) {
-			if (filterHash !== undefined) recordFilterHashMiss(filterHash);
+			if (key !== undefined) recordFilterHashMiss(key);
+			// The 409 body is never read; leaving it open holds its connection.
+			await response.body?.cancel();
 			response = await post(true);
 			// The retry succeeding says nothing about whether hashing works here,
 			// so the run of misses stands until a hash-only poll is answered.
-		} else if (filterHash !== undefined && !sendFilter && response.ok) {
+		} else if (key !== undefined && !sendFilter && response.ok) {
 			// Only a hash-only poll that actually succeeded proves the miss run is
 			// over. A 429 or a 500 says nothing, and counting those as recoveries
 			// would keep resetting the run on a server that is shedding load — the
 			// case the always-send fallback exists to escape.
-			filterHashMisses.delete(filterHash);
+			filterHashMisses.delete(key);
 		}
 
-		if (filterHash !== undefined) {
-			// Read on failures too — the server sets it there so a client being
-			// rate-limited still learns to stop asking by hash.
+		if (key !== undefined) {
+			// Checked on any response rather than only a success. The server can
+			// only produce it alongside one today, but reading it unconditionally
+			// costs nothing and does not go stale if that changes.
 			if (response.headers.get("X-Filter-Cached") === "0") {
-				alwaysSendFilterHashes.add(filterHash);
-				knownFilterHashes.delete(filterHash);
-			} else if (response.ok) {
-				knownFilterHashes.add(filterHash);
+				uncacheableFilterHashes.add(key);
+				knownFilterHashes.delete(key);
+			} else if (response.ok && filterHash !== undefined) {
+				knownFilterHashes.add(key);
 			}
 		}
 

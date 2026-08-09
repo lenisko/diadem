@@ -76,8 +76,9 @@ describe("readRequestBody", () => {
 	it("refuses an oversized body that declares no length", async () => {
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
-				// Several chunks, so the cap has to trip mid-read rather than on a length.
-				for (let i = 0; i < 6; i++) controller.enqueue(new Uint8Array(64 * 1024));
+				// Several chunks past the cap, so it has to trip mid-read rather than
+				// on a declared length.
+				for (let i = 0; i < 24; i++) controller.enqueue(new Uint8Array(64 * 1024));
 				controller.close();
 			}
 		});
@@ -105,6 +106,18 @@ describe("readRequestBody", () => {
 		await expect(readRequestBody(msgpackRequest(nested), { keepNulls: true })).rejects.toThrow(
 			/nested too deeply/
 		);
+	});
+
+	// JSON.parse is iterative and accepts nesting far past anything that later
+	// walks the result — stableStringify and JSON.stringify both recurse — so the
+	// depth bound has to apply to this path too, not just to msgpack.
+	it("rejects a deeply nested json body", async () => {
+		const request = new Request("http://localhost/api/pokemon", {
+			method: "POST",
+			body: `{"filter":${"[".repeat(5000)}${"]".repeat(5000)}}`,
+			headers: { "Content-Type": "application/json" }
+		});
+		await expect(readRequestBody(request)).rejects.toThrow(/nested too deeply/);
 	});
 
 	it("rejects a body nested past the depth limit", async () => {

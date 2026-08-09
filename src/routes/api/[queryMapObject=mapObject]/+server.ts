@@ -36,6 +36,15 @@ const FILTER_HASH_PATTERN = /^[0-9a-z]{1,16}$/;
  */
 const DENIED_CHARGE = 100;
 
+function hasFiniteBounds(data: MapObjectRequestData): boolean {
+	return (
+		Number.isFinite(data.minLat) &&
+		Number.isFinite(data.maxLat) &&
+		Number.isFinite(data.minLon) &&
+		Number.isFinite(data.maxLon)
+	);
+}
+
 export const POST: RequestHandler = async (event) => {
 	const { request, locals, params, getClientAddress } = event;
 	const rateLimitKey = locals.user?.id ?? getClientAddress();
@@ -88,8 +97,9 @@ export const POST: RequestHandler = async (event) => {
 		error(400);
 	}
 	// A valid msgpack body can still be a scalar, and reading a field off it
-	// would throw out of the handler as a 500.
-	if (!data || typeof data !== "object" || Array.isArray(data)) {
+	// would throw out of the handler as a 500. The bounds get the same treatment:
+	// they are the query, and an absent one reaches the driver as undefined.
+	if (!data || typeof data !== "object" || Array.isArray(data) || !hasFiniteBounds(data)) {
 		await refund(DENIED_CHARGE);
 		error(400);
 	}
@@ -112,10 +122,19 @@ export const POST: RequestHandler = async (event) => {
 			? data.filterHash
 			: undefined;
 	let filter: AnyFilter | undefined = data.filter;
-	// Carried on the failures too: a client that never learns its filter is
-	// uncacheable retries by hash forever, doubling its request rate exactly when
-	// the server is shedding load.
+	// Only ever set once a filter has been sent and the cache has refused it, so
+	// it rides on the success below and nowhere else — the earlier returns either
+	// precede the read or happen when no filter was sent at all.
 	let extraHeaders: Record<string, string> | undefined;
+
+	// A hash that was sent but is malformed must still be answered with a resend.
+	// Falling through would run the query with no filter at all and return the
+	// whole viewport, which is the opposite of what the client asked for.
+	if (data.filterHash != null && !filterHash && !filter) {
+		await refund(DENIED_CHARGE);
+		return respond(request, { data: [] }, { status: constants.HTTP_STATUS_CONFLICT });
+	}
+
 	if (filterHash) {
 		if (filter) {
 			// The hash has to be the one this filter actually produces, or a client
@@ -124,6 +143,10 @@ export const POST: RequestHandler = async (event) => {
 			const cached =
 				getFilterHash(filter) === filterHash && rememberFilter(filterKey, type, filterHash, filter);
 			if (!cached) extraHeaders = { "X-Filter-Cached": "0" };
+			// Query with the stored copy, so this request and every later hash-only
+			// one run against the same object. Caching round-trips through JSON,
+			// which does not survive values JSON cannot write.
+			else filter = recallFilter(filterKey, type, filterHash) ?? filter;
 		} else {
 			filter = recallFilter(filterKey, type, filterHash);
 			if (!filter) {
