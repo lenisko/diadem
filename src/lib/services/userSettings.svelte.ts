@@ -234,6 +234,9 @@ const KEEPALIVE_MAX_BYTES = 64 * 1024;
  */
 const MAX_SYNC_FAILURES = 3;
 
+/** A save that hasn't settled by now is treated as failed, so the guard clears. */
+const SYNC_TIMEOUT_MS = 15_000;
+
 let syncTimer: ReturnType<typeof setTimeout> | undefined;
 /** Something other than the map position changed, so the whole object must go. */
 let fullSyncPending = false;
@@ -254,7 +257,7 @@ function scheduleSync() {
 	// A plain trailing debounce would starve while the map is being panned
 	// continuously, so the timer is not restarted — one write per window.
 	if (syncTimer) return;
-	syncTimer = setTimeout(() => syncUserSettings(false), SETTINGS_SYNC_DELAY_MS);
+	syncTimer = setTimeout(() => syncUserSettings("timer"), SETTINGS_SYNC_DELAY_MS);
 }
 
 export function updateUserSettings() {
@@ -284,19 +287,29 @@ export function updateMapPosition() {
 	scheduleSync();
 }
 
-function syncUserSettings(unloading: boolean) {
+/**
+ * "timer" is the ordinary debounced write. "hidden" is a backgrounded page,
+ * which must send now but still queue behind an in-flight save, since the page
+ * lives on. "closing" is a real unload, where there is no later.
+ */
+type SyncReason = "timer" | "hidden" | "closing";
+
+function syncUserSettings(reason: SyncReason) {
 	if (syncTimer) {
 		clearTimeout(syncTimer);
 		syncTimer = undefined;
 	}
 
-	// One at a time, unload included. The endpoint replaces the whole row, so two
-	// saves in flight together can land in either order and leave the older one
-	// stored while the client believes the newer was written. The unload path is
-	// not an exception: visibilitychange fires on an ordinary tab switch, so
-	// exempting it raced exactly like the case this prevents. Whatever is pending
-	// goes out when the current save settles, below.
-	if (syncInFlight) {
+	// One at a time. The endpoint replaces the whole row, so two saves in flight
+	// together can land in either order and leave the older one stored while the
+	// client believes the newer was written; whatever is pending goes out when the
+	// current save settles instead.
+	//
+	// Except when the page is actually going away, where there is no "when it
+	// settles" — holding back guarantees the change is lost, while sending it
+	// loses only if the older save happens to land second. Backgrounding is not
+	// that case: the page lives on and the queue drains normally.
+	if (syncInFlight && reason !== "closing") {
 		scheduleSync();
 		return;
 	}
@@ -315,15 +328,15 @@ function syncUserSettings(unloading: boolean) {
 			post(
 				SETTINGS_ENDPOINT,
 				JSON.parse(payload),
-				unloading,
+				reason,
 				() => {
-					settleSync();
 					lastSyncedUserSettings = undefined;
-					// Re-arm, so the change is retried on the next one or at unload.
-					// Nothing else would resend it: map moves take the position path now,
-					// where before this they rewrote the whole object and healed it.
+					// Re-armed before settling, so settleSync sees it and schedules the
+					// retry. Nothing else would resend it: map moves take the position
+					// path now, where before this they rewrote the whole object.
 					if (++syncFailures <= MAX_SYNC_FAILURES) fullSyncPending = true;
 					else console.warn("Giving up on syncing settings after repeated failures");
+					settleSync();
 				},
 				() => {
 					settleSync();
@@ -340,12 +353,16 @@ function syncUserSettings(unloading: boolean) {
 	if (positionSyncPending) {
 		positionSyncPending = false;
 		const { center, zoom } = userSettings.mapPosition;
+		// Counts as in flight like any other write: a stalled position patch that
+		// lands after a full save would put the old viewport back.
+		syncInFlight = true;
 		post(
 			POSITION_ENDPOINT,
 			{ lat: center.lat, lng: center.lng, zoom },
-			unloading,
+			reason,
 			// The position is resent on the next move anyway.
-			() => {}
+			settleSync,
+			settleSync
 		);
 	}
 }
@@ -363,7 +380,7 @@ function settleSync() {
 function post(
 	url: string,
 	body: unknown,
-	unloading: boolean,
+	reason: SyncReason,
 	onFailure: () => void,
 	onSuccess: () => void = () => {}
 ) {
@@ -387,13 +404,19 @@ function post(
 		typeof encoded.body === "string"
 			? new TextEncoder().encode(encoded.body).byteLength
 			: encoded.body.byteLength;
-	const keepalive = unloading && size < KEEPALIVE_MAX_BYTES;
+	// Any flush the page might not survive wants keepalive, backgrounding
+	// included — a frozen page cancels an ordinary request.
+	const keepalive = reason !== "timer" && size < KEEPALIVE_MAX_BYTES;
 
 	fetch(url, {
 		method: "POST",
 		body: encoded.body,
 		headers: getHeaders({ contentType: encoded.contentType }),
-		keepalive
+		keepalive,
+		// A request that never settles would otherwise leave the one-at-a-time
+		// guard set for the rest of the session, quietly ending all syncing.
+		// keepalive sends are exempt: the page is going away regardless.
+		signal: keepalive ? undefined : AbortSignal.timeout(SYNC_TIMEOUT_MS)
 	})
 		.then(async (response) => {
 			// The endpoint answers 200 with an error body when the session has gone,
@@ -407,13 +430,13 @@ function post(
 }
 
 if (browser) {
-	const flush = () => {
-		if (fullSyncPending || positionSyncPending) syncUserSettings(true);
+	const flush = (reason: SyncReason) => {
+		if (fullSyncPending || positionSyncPending) syncUserSettings(reason);
 	};
 	// pagehide rather than unload, which is unreliable on mobile Safari.
-	window.addEventListener("pagehide", flush);
+	window.addEventListener("pagehide", () => flush("closing"));
 	document.addEventListener("visibilitychange", () => {
-		if (document.visibilityState === "hidden") flush();
+		if (document.visibilityState === "hidden") flush("hidden");
 	});
 }
 

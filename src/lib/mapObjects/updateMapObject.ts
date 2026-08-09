@@ -128,10 +128,15 @@ export async function fetchMapObjects<T extends MapData>(
 	const filterHash = key !== undefined && uncacheableFilterHashes.has(key) ? undefined : hash;
 
 	async function post(withFilter: boolean): Promise<Response> {
+		// Re-hashed at send time when the filter goes with it. `filter` is the live
+		// reactive object, so a user editing it during a 409 round trip would
+		// otherwise have the retry carry the new filter under the old hash — the
+		// server rejects that pairing and the client concludes, permanently, that
+		// the filter cannot be cached.
 		const body: MapObjectRequestData = {
 			...currentBounds,
 			filter: withFilter ? filter : undefined,
-			filterHash,
+			filterHash: withFilter ? getFilterHash(filter) : filterHash,
 			since
 		};
 		const encoded = encodeRequestBody(body);
