@@ -1,5 +1,9 @@
+import type { AnyFilter } from "@/lib/features/filters/filters";
 import { MapObjectType } from "@/lib/mapObjects/mapObjectTypes";
 import type { MapObjectRequestData } from "@/lib/mapObjects/updateMapObject";
+import { getClientIdentity } from "@/lib/server/api/clientIdentity";
+import { recallFilter, rememberFilter } from "@/lib/server/api/filterCache";
+import { readRequestBody } from "@/lib/server/api/requestBody";
 import {
 	calculateRequestCharge,
 	rateLimit,
@@ -19,8 +23,12 @@ import type { RequestHandler } from "./$types";
 
 const log = getLogger("mapobjects");
 
-export const POST: RequestHandler = async ({ request, locals, params, getClientAddress }) => {
+export const POST: RequestHandler = async (event) => {
+	const { request, locals, params, getClientAddress } = event;
 	const rateLimitKey = locals.user?.id ?? getClientAddress();
+	// Filters are cached per browser, not per address: behind a reverse proxy every
+	// logged-out visitor shares one address and would contend for one cache slot.
+	const filterKey = getClientIdentity(event);
 	const type = params.queryMapObject as MapObjectType;
 	const family = featureFamily[type];
 
@@ -28,7 +36,23 @@ export const POST: RequestHandler = async ({ request, locals, params, getClientA
 	if (!hasAnyFeatureAnywhereServer(locals.perms, family, locals.user)) error(401);
 	const permCheckTime = performance.now();
 
-	const data: MapObjectRequestData = await request.json();
+	const data: MapObjectRequestData = await readRequestBody(request);
+
+	// Clients poll with a filter hash instead of the whole filter. Ask for a
+	// full resend whenever the cached copy is missing or stale.
+	let filter: AnyFilter | undefined = data.filter;
+	let uncacheable = false;
+	if (data.filterHash) {
+		if (filter) {
+			uncacheable = !rememberFilter(filterKey, type, data.filterHash, filter);
+		} else {
+			filter = recallFilter(filterKey, type, data.filterHash);
+			if (!filter) {
+				return respond(request, { data: [] }, { status: constants.HTTP_STATUS_CONFLICT });
+			}
+		}
+	}
+
 	const permitted = checkFeaturesInBounds(locals.perms, family, data);
 
 	if (!permitted) {
@@ -61,7 +85,7 @@ export const POST: RequestHandler = async ({ request, locals, params, getClientA
 	const result = await queryMapObjects(
 		type,
 		permitted.bounds,
-		data.filter,
+		filter,
 		permitted.polygon,
 		data.since,
 		requestLimit,
@@ -86,7 +110,13 @@ export const POST: RequestHandler = async ({ request, locals, params, getClientA
 	}
 
 	const queryTime = performance.now();
-	const response = respond(request, result);
+	// Tell the client not to poll this filter by hash: it is too large to cache,
+	// so every hash-only attempt would 409 and cost a second round trip.
+	const response = respond(
+		request,
+		result,
+		uncacheable ? { headers: { "X-Filter-Cached": "0" } } : undefined
+	);
 	const serializeTime = performance.now();
 
 	log.info(

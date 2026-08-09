@@ -25,10 +25,26 @@ import { getUserDetails } from "@/lib/services/user/userDetails.svelte";
 import { featureFamily } from "@/lib/utils/features";
 import { getUserSettings } from "@/lib/services/userSettings.svelte.js";
 import { currentTimestamp } from "@/lib/utils/currentTimestamp";
-import { getHeaders, parseResponse } from "@/lib/utils/requests";
+import { getFilterHash } from "@/lib/utils/filterHash";
+import { encodeRequestBody, getHeaders, parseResponse } from "@/lib/utils/requests";
 import { SvelteMap } from "svelte/reactivity";
 
-export type MapObjectRequestData = Bounds & { filter: AnyFilter | undefined; since?: number };
+export type MapObjectRequestData = Bounds & {
+	filter?: AnyFilter | undefined;
+	/** Stable hash of `filter`. When set without `filter`, the server uses its cached copy. */
+	filterHash?: string;
+	since?: number;
+};
+
+/** The server has no cached filter for the sent hash and wants a full resend. */
+const STATUS_FILTER_UNKNOWN = 409;
+
+/**
+ * Hashes the server told us it will not cache, because the filter is too large.
+ * Polling those by hash would 409 and resend on every single request, so they go
+ * out in full from the start.
+ */
+const uncacheableFilterHashes = new Set<string>();
 
 let currentController: AbortController | undefined;
 const lastQueryTimestamps = new SvelteMap<MapObjectType, number>();
@@ -56,18 +72,37 @@ export async function fetchMapObjects<T extends MapData>(
 	signal?: AbortSignal,
 	since?: number
 ): Promise<MapObjectResponse<T> | undefined> {
-	const body: MapObjectRequestData = {
-		...getBounds(),
-		filter,
-		since
-	};
-	try {
-		const response = await fetch("/api/" + type, {
+	const currentBounds = getBounds();
+	const filterHash = getFilterHash(filter);
+
+	async function post(withFilter: boolean): Promise<Response> {
+		const body: MapObjectRequestData = {
+			...currentBounds,
+			filter: withFilter ? filter : undefined,
+			filterHash,
+			since
+		};
+		const encoded = encodeRequestBody(body);
+		return await fetch("/api/" + type, {
 			method: "POST",
-			body: JSON.stringify(body),
-			headers: getHeaders({ msgpack: true }),
+			body: encoded.body,
+			headers: getHeaders({ msgpack: true, contentType: encoded.contentType, clientId: true }),
 			signal
 		});
+	}
+
+	try {
+		// Poll without the filter body and resend it only when the server's cached
+		// copy is missing or stale.
+		const sendFilter = filterHash === undefined || uncacheableFilterHashes.has(filterHash);
+		let response = await post(sendFilter);
+		if (response.status === STATUS_FILTER_UNKNOWN) {
+			response = await post(true);
+		}
+
+		if (filterHash !== undefined && response.headers.get("X-Filter-Cached") === "0") {
+			uncacheableFilterHashes.add(filterHash);
+		}
 
 		return await parseResponse<MapObjectResponse<T>>(response);
 	} catch (e) {
