@@ -214,71 +214,113 @@ export function getUserSettings() {
 }
 
 /**
- * Longest a settings change waits before reaching the server. Every map move
- * updates the stored position, and the endpoint replaces the whole row, so
- * without this a pan sends the entire settings blob — filters included — and
- * writes the database, once per gesture.
+ * Longest a change waits before reaching the server. Map moves would otherwise
+ * write once per gesture, for a position that changes again a moment later.
  */
 const SETTINGS_SYNC_DELAY_MS = 2000;
 
-let settingsSyncTimer: ReturnType<typeof setTimeout> | undefined;
-let pendingUserSettings: string | undefined;
+const SETTINGS_ENDPOINT = "/api/user/settings";
+const POSITION_ENDPOINT = "/api/user/settings/position";
+
+let syncTimer: ReturnType<typeof setTimeout> | undefined;
+/** Something other than the map position changed, so the whole object must go. */
+let fullSyncPending = false;
+let positionSyncPending = false;
 let lastSyncedUserSettings: string | undefined;
 
-export function updateUserSettings() {
-	const serializedUserSettings = JSON.stringify(userSettings);
+/** Everything the client keeps locally, regardless of what the server is told. */
+function persistUserSettingsLocally(): string {
+	const serialized = JSON.stringify(userSettings);
+	if (browser && window.localStorage) localStorage.setItem("userSettings", serialized);
+	return serialized;
+}
 
-	// Local first and always: this is what the next page load reads.
-	if (browser && window.localStorage) {
-		localStorage.setItem("userSettings", serializedUserSettings);
-	}
-
-	if (!getUserDetails().details) return;
-	if (serializedUserSettings === lastSyncedUserSettings) return;
-
-	pendingUserSettings = serializedUserSettings;
+function scheduleSync() {
 	// A plain trailing debounce would starve while the map is being panned
 	// continuously, so the timer is not restarted — one write per window.
-	if (settingsSyncTimer) return;
-	settingsSyncTimer = setTimeout(syncUserSettings, SETTINGS_SYNC_DELAY_MS);
+	if (syncTimer) return;
+	syncTimer = setTimeout(() => syncUserSettings(false), SETTINGS_SYNC_DELAY_MS);
 }
 
-function syncUserSettings() {
-	settingsSyncTimer = undefined;
+export function updateUserSettings() {
+	const serialized = persistUserSettingsLocally();
 
-	const payload = pendingUserSettings;
-	pendingUserSettings = undefined;
-	if (!payload || payload === lastSyncedUserSettings) return;
+	if (!getUserDetails().details) return;
+	if (serialized === lastSyncedUserSettings) return;
 
-	lastSyncedUserSettings = payload;
-	fetch("/api/user/settings", { method: "POST", body: payload })
+	fullSyncPending = true;
+	scheduleSync();
+}
+
+/**
+ * Record where the user is looking. Split from updateUserSettings because the
+ * map calls it on every move, and the settings endpoint replaces the entire
+ * stored object — every filter and filterset — for what is three numbers.
+ */
+export function updateMapPosition() {
+	persistUserSettingsLocally();
+
+	if (!getUserDetails().details) return;
+
+	positionSyncPending = true;
+	scheduleSync();
+}
+
+function syncUserSettings(unloading: boolean) {
+	if (syncTimer) {
+		clearTimeout(syncTimer);
+		syncTimer = undefined;
+	}
+
+	// A full write carries the position too, so it supersedes a pending one.
+	const sendFull = fullSyncPending;
+	const sendPosition = !sendFull && positionSyncPending;
+	fullSyncPending = false;
+	positionSyncPending = false;
+
+	if (sendFull) {
+		const payload = JSON.stringify(userSettings);
+		if (payload === lastSyncedUserSettings) return;
+		lastSyncedUserSettings = payload;
+		post(SETTINGS_ENDPOINT, payload, unloading, () => (lastSyncedUserSettings = undefined));
+		return;
+	}
+
+	if (sendPosition) {
+		const { center, zoom } = userSettings.mapPosition;
+		post(
+			POSITION_ENDPOINT,
+			JSON.stringify({ lat: center.lat, lng: center.lng, zoom }),
+			unloading,
+			// The position is resent on the next move anyway.
+			() => {}
+		);
+	}
+}
+
+function post(url: string, payload: string, unloading: boolean, onFailure: () => void) {
+	if (unloading) {
+		// fetch is cancelled while the page unloads; sendBeacon is not.
+		navigator.sendBeacon?.(url, new Blob([payload], { type: "application/json" }));
+		return;
+	}
+
+	fetch(url, { method: "POST", body: payload })
 		.then((response) => {
 			// Let the next change try again rather than assuming this one landed.
-			if (!response.ok) lastSyncedUserSettings = undefined;
+			if (!response.ok) onFailure();
 		})
-		.catch(() => (lastSyncedUserSettings = undefined));
-}
-
-/** Send a pending change immediately, for when the page is going away. */
-function flushUserSettings() {
-	if (!settingsSyncTimer) return;
-	clearTimeout(settingsSyncTimer);
-	settingsSyncTimer = undefined;
-
-	const payload = pendingUserSettings;
-	pendingUserSettings = undefined;
-	if (!payload || payload === lastSyncedUserSettings) return;
-
-	lastSyncedUserSettings = payload;
-	// fetch is cancelled while the page unloads; sendBeacon is not.
-	navigator.sendBeacon?.("/api/user/settings", new Blob([payload], { type: "application/json" }));
+		.catch(onFailure);
 }
 
 if (browser) {
+	const flush = () => {
+		if (fullSyncPending || positionSyncPending) syncUserSettings(true);
+	};
 	// pagehide rather than unload, which is unreliable on mobile Safari.
-	window.addEventListener("pagehide", flushUserSettings);
+	window.addEventListener("pagehide", flush);
 	document.addEventListener("visibilitychange", () => {
-		if (document.visibilityState === "hidden") flushUserSettings();
+		if (document.visibilityState === "hidden") flush();
 	});
 }
 
