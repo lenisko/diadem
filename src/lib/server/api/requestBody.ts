@@ -27,12 +27,24 @@ const MAX_DEPTH = 64;
  */
 const MAX_BODY_BYTES = 256 * 1024;
 
+export type ReadBodyOptions = {
+	/**
+	 * Keep null properties instead of dropping them. Set this for bodies that are
+	 * stored rather than interpreted — a null there is the client's data, and
+	 * dropping it silently loses a field on its way to the database.
+	 */
+	keepNulls?: boolean;
+};
+
 /**
  * Read a request body as msgpack or JSON, depending on its Content-Type.
  * Clients send msgpack where they can — it is roughly half the size of the
  * equivalent JSON and request bodies are never compressed by the browser.
  */
-export async function readRequestBody<T>(request: Request): Promise<T> {
+export async function readRequestBody<T>(
+	request: Request,
+	options: ReadBodyOptions = {}
+): Promise<T> {
 	const contentType = request.headers.get("Content-Type") ?? "";
 	const raw = await readCapped(request);
 
@@ -46,7 +58,8 @@ export async function readRequestBody<T>(request: Request): Promise<T> {
 	// would defeat `!== undefined` guards such as the `since` delta cursor. Only
 	// the msgpack path needs this: in JSON an absent field is genuinely absent,
 	// so a null there was written deliberately.
-	dropNulls(body, 0);
+	if (options.keepNulls) checkDepth(body, 0);
+	else dropNulls(body, 0);
 	return body as T;
 }
 
@@ -85,6 +98,18 @@ async function readCapped(request: Request): Promise<Uint8Array> {
 		offset += chunk.byteLength;
 	}
 	return body;
+}
+
+/** The depth bound still applies when nulls are kept; nothing else walks the body. */
+function checkDepth(value: unknown, depth: number): void {
+	if (!value || typeof value !== "object") return;
+	if (depth >= MAX_DEPTH) throw new Error("Request body nested too deeply");
+
+	if (Array.isArray(value)) {
+		for (const item of value) checkDepth(item, depth + 1);
+		return;
+	}
+	for (const entry of Object.values(value)) checkDepth(entry, depth + 1);
 }
 
 function dropNulls(value: unknown, depth: number): void {

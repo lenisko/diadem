@@ -24,7 +24,8 @@ export function getHeaders(options?: {
  * binary msgpack bytes.
  */
 export function encodeRequestBody(body: unknown): {
-	body: BodyInit;
+	/** Narrower than BodyInit so callers can also hand it to Blob or sendBeacon. */
+	body: ArrayBuffer | string;
 	contentType: string;
 } {
 	if (isNative()) {

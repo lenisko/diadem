@@ -15,6 +15,7 @@ import { getConfig } from "@/lib/services/config/config";
 import type { AnySearchEntry } from "@/lib/services/search.svelte";
 import { getDefaultMapStyle } from "@/lib/services/themeMode";
 import { getUserDetails } from "@/lib/services/user/userDetails.svelte.js";
+import { encodeRequestBody, getHeaders } from "@/lib/utils/requests";
 import { getDefaultGymFilter } from "@/lib/utils/gymUtils";
 import { getDefaultPokestopFilter } from "@/lib/utils/pokestopUtils";
 import { getDefaultStationFilter } from "@/lib/utils/stationUtils";
@@ -282,7 +283,11 @@ function syncUserSettings(unloading: boolean) {
 		const payload = JSON.stringify(userSettings);
 		if (payload === lastSyncedUserSettings) return;
 		lastSyncedUserSettings = payload;
-		post(SETTINGS_ENDPOINT, payload, unloading, () => (lastSyncedUserSettings = undefined));
+		// Sent from the serialized form, so what goes over the wire is exactly what
+		// was compared — and free of the reactive proxies the live object is made of.
+		post(SETTINGS_ENDPOINT, JSON.parse(payload), unloading, () => {
+			lastSyncedUserSettings = undefined;
+		});
 		return;
 	}
 
@@ -290,7 +295,7 @@ function syncUserSettings(unloading: boolean) {
 		const { center, zoom } = userSettings.mapPosition;
 		post(
 			POSITION_ENDPOINT,
-			JSON.stringify({ lat: center.lat, lng: center.lng, zoom }),
+			{ lat: center.lat, lng: center.lng, zoom },
 			unloading,
 			// The position is resent on the next move anyway.
 			() => {}
@@ -298,12 +303,21 @@ function syncUserSettings(unloading: boolean) {
 	}
 }
 
-function post(url: string, payload: string, unloading: boolean, onFailure: () => void) {
+function post(url: string, body: unknown, unloading: boolean, onFailure: () => void) {
+	// msgpack where the platform allows it; the helper falls back to JSON on
+	// native, where the CapacitorHttp wrapper would corrupt a binary body.
+	const encoded = encodeRequestBody(body);
+
 	// keepalive rather than sendBeacon: a beacon skips window.fetch, which native
 	// builds patch to reach the configured instance with their bearer token, so a
 	// beacon there would post to the webview origin and be lost. keepalive
 	// outlives the page the same way and still reports what happened.
-	fetch(url, { method: "POST", body: payload, keepalive: unloading })
+	fetch(url, {
+		method: "POST",
+		body: encoded.body,
+		headers: getHeaders({ contentType: encoded.contentType }),
+		keepalive: unloading
+	})
 		.then(async (response) => {
 			// The endpoint answers 200 with an error body when the session has gone,
 			// so response.ok alone would record a rejected write as a success.

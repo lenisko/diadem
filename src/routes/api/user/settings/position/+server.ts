@@ -1,3 +1,4 @@
+import { readRequestBody } from "@/lib/server/api/requestBody";
 import { setUserMapPosition } from "@/lib/server/db/internal/repository";
 import { noStoreHttpHeaders } from "@/lib/utils/apiUtils.server";
 import { json } from "@sveltejs/kit";
@@ -44,7 +45,7 @@ export async function POST({ locals, request }) {
 
 	let body: PositionBody;
 	try {
-		body = await request.json();
+		body = await readRequestBody(request);
 	} catch {
 		return json({ error: "Invalid body" }, { status: 400, headers: noStoreHttpHeaders });
 	}

@@ -91,6 +91,22 @@ describe("readRequestBody", () => {
 		await expect(readRequestBody(request)).rejects.toThrow(/too large/);
 	});
 
+	// Stored bodies keep their nulls: dropping one silently loses a field the
+	// client meant to save, on its way to the database.
+	it("keeps nulls when asked to", async () => {
+		const request = msgpackRequest({ mapStyle: null, isLeftHanded: false });
+		const body = await readRequestBody<{ mapStyle: unknown }>(request, { keepNulls: true });
+		expect(body.mapStyle).toBeNull();
+	});
+
+	it("still bounds depth when keeping nulls", async () => {
+		let nested: unknown = 1;
+		for (let i = 0; i < 80; i++) nested = { a: nested };
+		await expect(readRequestBody(msgpackRequest(nested), { keepNulls: true })).rejects.toThrow(
+			/nested too deeply/
+		);
+	});
+
 	it("rejects a body nested past the depth limit", async () => {
 		// Below the encoder's own depth cap of 100, above the reader's limit of 64.
 		let nested: unknown = 1;

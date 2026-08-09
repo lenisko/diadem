@@ -1,4 +1,5 @@
 import { getUserSettings, setUserSettings } from "@/lib/server/db/internal/repository";
+import { readRequestBody } from "@/lib/server/api/requestBody";
 import { noStoreHttpHeaders } from "@/lib/utils/apiUtils.server";
 import { json } from "@sveltejs/kit";
 
@@ -8,7 +9,19 @@ export async function POST({ locals, request }) {
 	if (!locals.user) {
 		return json({ error: "Not logged in" }, { status: 401, headers: noStoreHttpHeaders });
 	}
-	await setUserSettings(locals.user.id, await request.json());
+
+	let settings: unknown;
+	try {
+		// keepNulls: this is stored verbatim, so a null is the user's data.
+		settings = await readRequestBody(request, { keepNulls: true });
+	} catch {
+		return json({ error: "Invalid body" }, { status: 400, headers: noStoreHttpHeaders });
+	}
+	if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+		return json({ error: "Invalid body" }, { status: 400, headers: noStoreHttpHeaders });
+	}
+
+	await setUserSettings(locals.user.id, settings as never);
 	return json({ error: null }, { headers: noStoreHttpHeaders });
 }
 
