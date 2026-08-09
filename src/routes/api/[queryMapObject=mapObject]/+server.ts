@@ -46,48 +46,9 @@ export const POST: RequestHandler = async (event) => {
 	if (!hasAnyFeatureAnywhereServer(locals.perms, family, locals.user)) error(401);
 	const permCheckTime = performance.now();
 
-	const data: MapObjectRequestData = await readRequestBody(request);
-
-	// Clients poll with a filter hash instead of the whole filter. Ask for a
-	// full resend whenever the cached copy is missing or stale.
-	const filterHash = FILTER_HASH_PATTERN.test(data.filterHash ?? "") ? data.filterHash : undefined;
-	let filter: AnyFilter | undefined = data.filter;
-	// Carried on every response, including the failures: a client that never
-	// learns its filter is uncacheable retries by hash forever, doubling its
-	// request rate exactly when the server is shedding load.
-	let extraHeaders: Record<string, string> | undefined;
-	if (filterHash) {
-		if (filter) {
-			if (!rememberFilter(filterKey, type, filterHash, filter)) {
-				extraHeaders = { "X-Filter-Cached": "0" };
-			}
-		} else {
-			filter = recallFilter(filterKey, type, filterHash);
-			if (!filter) {
-				// Not free: otherwise a random hash buys an unlimited run of requests
-				// that skip the limiter entirely.
-				await rateLimit(rateLimitKey, FILTER_CONFLICT_CHARGE, type);
-				return respond(
-					request,
-					{ data: [] },
-					{ headers: extraHeaders, status: constants.HTTP_STATUS_CONFLICT }
-				);
-			}
-		}
-	}
-
-	const permitted = checkFeaturesInBounds(locals.perms, family, data);
-
-	if (!permitted) {
-		return respond(
-			request,
-			{ data: [] },
-			{ headers: extraHeaders, status: constants.HTTP_STATUS_UNAUTHORIZED }
-		);
-	}
-
-	const permissionContext = new FeaturePermissionContext(locals.perms, family);
-
+	// Claimed before the body is even read, so that decoding — the most expensive
+	// thing an unauthenticated caller can make this endpoint do — is behind the
+	// limiter too. Every path below refunds what it did not use.
 	const requestLimit = requestLimits[type];
 	const [allowed, _, totalLimit, headers] = await rateLimitConsume(
 		rateLimitKey,
@@ -105,9 +66,61 @@ export const POST: RequestHandler = async (event) => {
 		return respond(
 			request,
 			{ data: [] },
-			{ headers: { ...headers, ...extraHeaders }, status: constants.HTTP_STATUS_TOO_MANY_REQUESTS }
+			{ headers, status: constants.HTTP_STATUS_TOO_MANY_REQUESTS }
 		);
 	}
+
+	/** Give back all but `charge` of what was claimed above. */
+	const refund = async (charge: number) => {
+		if (requestLimit > charge) await rateLimitReward(rateLimitKey, requestLimit - charge, type);
+	};
+
+	let data: MapObjectRequestData;
+	try {
+		data = await readRequestBody(request);
+	} catch {
+		// Malformed, oversized or over-nested body. A 500 with a stack is the wrong
+		// shape for what is simply a bad request.
+		await refund(FILTER_CONFLICT_CHARGE);
+		error(400);
+	}
+
+	// Clients poll with a filter hash instead of the whole filter. Ask for a
+	// full resend whenever the cached copy is missing or stale.
+	const filterHash = FILTER_HASH_PATTERN.test(data.filterHash ?? "") ? data.filterHash : undefined;
+	let filter: AnyFilter | undefined = data.filter;
+	// Carried on the failures too: a client that never learns its filter is
+	// uncacheable retries by hash forever, doubling its request rate exactly when
+	// the server is shedding load.
+	let extraHeaders: Record<string, string> | undefined;
+	if (filterHash) {
+		if (filter) {
+			if (!rememberFilter(filterKey, type, filterHash, filter)) {
+				extraHeaders = { "X-Filter-Cached": "0" };
+			}
+		} else {
+			filter = recallFilter(filterKey, type, filterHash);
+			if (!filter) {
+				// Charged, not free: a random hash would otherwise buy an unbounded
+				// run of requests that each pay a body read and a compressed response.
+				await refund(FILTER_CONFLICT_CHARGE);
+				return respond(request, { data: [] }, { status: constants.HTTP_STATUS_CONFLICT });
+			}
+		}
+	}
+
+	const permitted = checkFeaturesInBounds(locals.perms, family, data);
+
+	if (!permitted) {
+		await refund(0);
+		return respond(
+			request,
+			{ data: [] },
+			{ headers: extraHeaders, status: constants.HTTP_STATUS_UNAUTHORIZED }
+		);
+	}
+
+	const permissionContext = new FeaturePermissionContext(locals.perms, family);
 
 	const result = await queryMapObjects(
 		type,

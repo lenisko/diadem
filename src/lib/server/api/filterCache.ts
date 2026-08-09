@@ -39,6 +39,10 @@ let cachedBytes = 0;
 const filterCache = new TTLCache<string, Map<string, CachedFilter>>({
 	ttl: FILTER_CACHE_TTL,
 	max: FILTER_CACHE_MAX,
+	// A client polling by hash never re-sends the filter, so without this its
+	// entry expires the TTL after the last full send and it pays a 409 plus a
+	// full resend for every type, every TTL, for the life of the session.
+	updateAgeOnGet: true,
 	dispose: (filters) => {
 		for (const entry of filters.values()) cachedBytes -= entry.bytes;
 	}
@@ -55,8 +59,14 @@ export function rememberFilter(
 	hash: string,
 	filter: AnyFilter
 ): boolean {
-	const bytes = JSON.stringify(filter).length;
-	if (bytes > MAX_CACHED_FILTER_BYTES) return false;
+	const serialized = JSON.stringify(filter);
+	if (serialized.length > MAX_CACHED_FILTER_BYTES) return false;
+	const bytes = serialized.length;
+
+	// Cache a copy. The stored filter is handed to the query path on every later
+	// poll, so keeping the request's own object would make "nothing downstream
+	// mutates a filter" a silent, load-bearing invariant.
+	const stored = JSON.parse(serialized) as AnyFilter;
 
 	const key = cacheKey(clientKey, type);
 	const filters = filterCache.get(key) ?? new Map<string, CachedFilter>();
@@ -65,7 +75,7 @@ export function rememberFilter(
 	const existing = filters.get(hash);
 	if (existing) cachedBytes -= existing.bytes;
 	filters.delete(hash);
-	filters.set(hash, { filter, bytes });
+	filters.set(hash, { filter: stored, bytes });
 	cachedBytes += bytes;
 
 	while (filters.size > FILTERS_PER_KEY) {
@@ -95,5 +105,13 @@ export function recallFilter(
 	type: MapObjectType,
 	hash: string
 ): AnyFilter | undefined {
-	return filterCache.get(cacheKey(clientKey, type))?.get(hash)?.filter;
+	const filters = filterCache.get(cacheKey(clientKey, type));
+	const entry = filters?.get(hash);
+	if (!filters || !entry) return undefined;
+
+	// Re-insert so the hash being actively polled is the last one evicted when
+	// this key fills up, rather than the first because it was inserted earliest.
+	filters.delete(hash);
+	filters.set(hash, entry);
+	return entry.filter;
 }
