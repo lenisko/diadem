@@ -133,6 +133,10 @@ export const POST: RequestHandler = async (event) => {
 			const cached =
 				getFilterHash(filter) === filterHash && rememberFilter(filterKey, type, filterHash, filter);
 			if (!cached) extraHeaders = { "X-Filter-Cached": "0" };
+			// Query with the stored copy, so this request and every later hash-only
+			// one run against the same object. Caching round-trips through JSON,
+			// which does not survive values JSON cannot write.
+			else filter = recallFilter(filterKey, type, filterHash) ?? filter;
 		} else {
 			filter = recallFilter(filterKey, type, filterHash);
 			if (!filter) {

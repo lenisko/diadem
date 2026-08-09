@@ -261,6 +261,9 @@ export function updateUserSettings() {
 	if (!getUserDetails().details) return;
 	if (serialized === lastSyncedUserSettings) return;
 
+	// A real edit deserves a fresh run of attempts, whatever happened to the
+	// last one — otherwise a spent budget silently disables saving for good.
+	syncFailures = 0;
 	fullSyncPending = true;
 	scheduleSync();
 }
@@ -348,7 +351,14 @@ function post(
 	// It is refused outright past 64 KiB though, and a settings blob can exceed
 	// that, so an oversized unload send goes as an ordinary request instead — it
 	// may be cut short, which beats being rejected for certain.
-	const size = typeof encoded.body === "string" ? encoded.body.length : encoded.body.byteLength;
+	// Byte length, not string length: the limit is bytes, and anything non-ASCII
+	// — a Cyrillic search entry, an emoji in a filterset title — takes more than
+	// one per character. Overshooting means fetch rejects the send outright
+	// instead of falling back to an ordinary one.
+	const size =
+		typeof encoded.body === "string"
+			? new TextEncoder().encode(encoded.body).byteLength
+			: encoded.body.byteLength;
 	const keepalive = unloading && size < KEEPALIVE_MAX_BYTES;
 
 	fetch(url, {

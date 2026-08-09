@@ -67,6 +67,15 @@ const knownFilterHashes = new Set<string>();
 const filterHashMisses = new Map<string, number>();
 const MAX_FILTER_HASH_MISSES = 3;
 
+/**
+ * The server caches per (client, map object type, hash), so this bookkeeping is
+ * keyed the same way. Sharing an entry between types would let a hit for one
+ * send the other hash-only into a 409, and let that miss count against both.
+ */
+function hashKey(type: MapObjectType, hash: string): string {
+	return type + " " + hash;
+}
+
 let currentController: AbortController | undefined;
 const lastQueryTimestamps = new SvelteMap<MapObjectType, number>();
 
@@ -113,9 +122,10 @@ export async function fetchMapObjects<T extends MapData>(
 ): Promise<MapObjectResponse<T> | undefined> {
 	const currentBounds = getBounds();
 	const hash = getFilterHash(filter);
+	const key = hash === undefined ? undefined : hashKey(type, hash);
 	// Omitted when the server has told us it won't cache this filter, so it does
 	// no hashing work for an answer both sides already know.
-	const filterHash = hash !== undefined && uncacheableFilterHashes.has(hash) ? undefined : hash;
+	const filterHash = key !== undefined && uncacheableFilterHashes.has(key) ? undefined : hash;
 
 	async function post(withFilter: boolean): Promise<Response> {
 		const body: MapObjectRequestData = {
@@ -138,36 +148,37 @@ export async function fetchMapObjects<T extends MapData>(
 		// proven not to work; poll by hash alone once the server is known to hold it.
 		const sendFilter =
 			filterHash === undefined ||
-			!knownFilterHashes.has(filterHash) ||
-			alwaysSendFilterHashes.has(filterHash);
+			key === undefined ||
+			!knownFilterHashes.has(key) ||
+			alwaysSendFilterHashes.has(key);
 
 		let response = await post(sendFilter);
 		// The server dropped it — a restart, the cache expiring, or another process
 		// in a multi-worker deployment that has not seen this filter yet.
 		if (response.status === STATUS_FILTER_UNKNOWN) {
-			if (filterHash !== undefined) recordFilterHashMiss(filterHash);
+			if (key !== undefined) recordFilterHashMiss(key);
 			// The 409 body is never read; leaving it open holds its connection.
 			await response.body?.cancel();
 			response = await post(true);
 			// The retry succeeding says nothing about whether hashing works here,
 			// so the run of misses stands until a hash-only poll is answered.
-		} else if (filterHash !== undefined && !sendFilter && response.ok) {
+		} else if (key !== undefined && !sendFilter && response.ok) {
 			// Only a hash-only poll that actually succeeded proves the miss run is
 			// over. A 429 or a 500 says nothing, and counting those as recoveries
 			// would keep resetting the run on a server that is shedding load — the
 			// case the always-send fallback exists to escape.
-			filterHashMisses.delete(filterHash);
+			filterHashMisses.delete(key);
 		}
 
-		if (hash !== undefined) {
+		if (key !== undefined) {
 			// Checked on any response rather than only a success. The server can
 			// only produce it alongside one today, but reading it unconditionally
 			// costs nothing and does not go stale if that changes.
 			if (response.headers.get("X-Filter-Cached") === "0") {
-				uncacheableFilterHashes.add(hash);
-				knownFilterHashes.delete(hash);
+				uncacheableFilterHashes.add(key);
+				knownFilterHashes.delete(key);
 			} else if (response.ok && filterHash !== undefined) {
-				knownFilterHashes.add(hash);
+				knownFilterHashes.add(key);
 			}
 		}
 

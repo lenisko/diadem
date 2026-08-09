@@ -21,6 +21,14 @@ describe("stableStringify", () => {
 		expect(stableStringify({ a: 1, b: null })).toBe(stableStringify({ a: 1 }));
 	});
 
+	// An open-ended range reaches the server as null over JSON and as a real
+	// infinity over msgpack; both sides have to ignore it to agree.
+	it("treats a non-finite number the same as an absent one", () => {
+		expect(stableStringify({ min: 0, max: Infinity })).toBe(stableStringify({ min: 0 }));
+		expect(stableStringify({ min: 0, max: Infinity })).toBe(stableStringify({ min: 0, max: null }));
+		expect(stableStringify({ n: NaN })).toBe(stableStringify({}));
+	});
+
 	it("sorts nested keys", () => {
 		expect(stableStringify({ x: { b: 1, a: [{ d: 1, c: 2 }] } })).toBe(
 			'{"x":{"a":[{"c":2,"d":1}],"b":1}}'
