@@ -60,11 +60,23 @@ type Auth = {
 	secret?: string;
 	baseUrl?: string;
 	discord?: AuthDiscord;
+	headerAuth?: AuthHeaderAuth;
 };
 
 type AuthDiscord = {
 	clientId: string;
 	clientSecret: string;
+};
+
+type AuthHeaderAuth = {
+	enabled: boolean;
+	// guild IDs the upstream auth gateway is trusted to vouch for, used to
+	// resolve permission rules that match by `guildId` only (no roleId).
+	guildIds?: string[];
+	// optional shared secret. When set, the gateway must forward
+	// `X-Gateway-Secret` matching this value. Defense in depth in case the
+	// service is accidentally exposed without the 127.0.0.1 bind.
+	gatewaySecret?: string;
 };
 
 type ClientDiscord = {

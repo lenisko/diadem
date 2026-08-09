@@ -1,6 +1,6 @@
 import type { Handle, ServerInit } from "@sveltejs/kit";
 
-import { getUserByDiscordId } from "@/lib/server/auth/auth";
+import { createHeaderAuthUser, getUserByDiscordId } from "@/lib/server/auth/auth";
 import {
 	AUTH_BASE_PATH,
 	auth,
@@ -9,7 +9,11 @@ import {
 	isAuthEnabled
 } from "@/lib/server/auth/betterAuth";
 import TTLCache from "@isaacs/ttlcache";
-import { getEveryonePerms, updatePermissions } from "@/lib/server/auth/permissions";
+import {
+	getEveryonePerms,
+	getPermsFromRoleIds,
+	updatePermissions
+} from "@/lib/server/auth/permissions";
 import type { User } from "@/lib/server/db/internal/schema";
 import { PERMISSION_UPDATE_INTERVAL } from "@/lib/constants";
 import type { Perms } from "@/lib/utils/features";
@@ -18,9 +22,10 @@ import { paraglideMiddleware } from "@/lib/paraglide/server";
 import { sequence } from "@sveltejs/kit/hooks";
 import { setServerLoggerFactory } from "@/lib/utils/logger";
 import { getServerLogger } from "@/lib/server/logging";
-import { getClientConfig } from "@/lib/services/config/config.server";
+import { getClientConfig, getServerConfig } from "@/lib/services/config/config.server";
 import { setConfig } from "@/lib/services/config/config";
 import { getDisallowedPaths } from "@/lib/utils/disallowedPaths";
+import { timingSafeEqual } from "node:crypto";
 
 process.title = "Diadem";
 
@@ -70,11 +75,66 @@ function updatePermissionsLocked(user: User, accessToken: string, thisFetch: typ
 	return updatePromise;
 }
 
+// Perms keyed by user + forwarded role set, so a gateway user's permissions
+// refresh on the same interval as cookie-auth users without a per-request DB hit.
+const headerPermsCache: TTLCache<string, Perms> = new TTLCache({
+	ttl: PERMISSION_UPDATE_INTERVAL * 1000,
+	max: 10_000
+});
+
+// Discord snowflake IDs are 17–20 digits; allow a small margin of safety.
+const DISCORD_ID_RE = /^\d{1,25}$/;
+
+// Constant-time compare for arbitrary-length strings. The length check leaks
+// secret length but is required because `timingSafeEqual` rejects unequal
+// lengths. Acceptable trade-off for a shared-secret header.
+function timingSafeStringEq(a: string, b: string): boolean {
+	const aBuf = Buffer.from(a);
+	const bBuf = Buffer.from(b);
+	if (aBuf.length !== bBuf.length) return false;
+	return timingSafeEqual(aBuf, bBuf);
+}
+
+function deepFreeze<T>(obj: T): T {
+	if (obj && typeof obj === "object") {
+		for (const v of Object.values(obj as Record<string, unknown>)) deepFreeze(v);
+		Object.freeze(obj);
+	}
+	return obj;
+}
+
+function splitCsv(v: string | null): string[] {
+	return (v ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
+
+// Resolve (or lazily create) the DB user row for a gateway-authenticated
+// Discord id. Tolerates the create racing another request for the same id.
+async function resolveHeaderUser(discordId: string, displayName: string): Promise<User | null> {
+	const existing = await getUserByDiscordId(discordId);
+	if (existing) return existing;
+	try {
+		await createHeaderAuthUser(discordId, displayName);
+	} catch (e) {
+		const code = (e as { code?: string; errno?: number }).code;
+		const errno = (e as { code?: string; errno?: number }).errno;
+		if (code !== "ER_DUP_ENTRY" && errno !== 1062) {
+			authLog.error(`Header auth: failed to create user ${discordId}: ${e}`);
+			throw e;
+		}
+	}
+	return getUserByDiscordId(discordId);
+}
+
 const handleAuth: Handle = async ({ event, resolve }) => {
 	if (process.env.BUILD_TARGET === "native") {
 		event.locals.perms = { everywhere: [], areas: [] };
 		event.locals.user = null;
 		event.locals.session = null;
+		event.locals.authSource = null;
+		event.locals.headerProfile = null;
 		return resolve(event);
 	}
 
@@ -94,8 +154,76 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 	event.locals.perms = await getEveryonePerms(event.fetch);
 	event.locals.user = null;
 	event.locals.session = null;
+	event.locals.authSource = null;
+	event.locals.headerProfile = null;
 
-	if (!isAuthEnabled()) {
+	// Upstream-gateway auth (e.g. nginx auth_request). When enabled and
+	// `X-User-ID` is present, build user/perms from forwarded headers and skip
+	// the Discord session path. Diadem must be bound to 127.0.0.1 so direct
+	// requests cannot spoof these headers.
+	const headerAuthCfg = getServerConfig().auth.headerAuth;
+	const headerUserId = headerAuthCfg?.enabled ? event.request.headers.get("x-user-id") : null;
+	if (headerAuthCfg?.enabled && headerUserId) {
+		if (!DISCORD_ID_RE.test(headerUserId)) {
+			authLog.warning(
+				`Header auth: rejecting malformed X-User-ID (len=${headerUserId.length}), falling back to cookie path`
+			);
+		} else {
+			// Optional shared-secret defense in depth. If a secret is configured
+			// the gateway must forward it; otherwise reject. Empty string is
+			// rejected at startup, see init().
+			if (
+				typeof headerAuthCfg.gatewaySecret === "string" &&
+				headerAuthCfg.gatewaySecret.length > 0
+			) {
+				const got = event.request.headers.get("x-gateway-secret") ?? "";
+				if (!timingSafeStringEq(headerAuthCfg.gatewaySecret, got)) {
+					return new Response("invalid gateway secret", { status: 401 });
+				}
+			}
+
+			const headerUsername = event.request.headers.get("x-user-username") ?? "";
+			const headerDisplayName = event.request.headers.get("x-user-display-name") ?? "";
+			const headerAvatarHash = event.request.headers.get("x-user-avatar-hash") ?? "";
+			const headerRoles = splitCsv(event.request.headers.get("x-user-roles"));
+			const headerRoleIds = splitCsv(event.request.headers.get("x-user-role-ids"));
+			const displayName = headerDisplayName || headerUsername || headerUserId;
+
+			const user = await resolveHeaderUser(headerUserId, displayName);
+			if (!user) {
+				authLog.error(`Header auth: could not resolve user id for ${headerUserId}`);
+				return new Response("auth failed", { status: 500 });
+			}
+
+			// Discord role IDs are numeric snowflakes — no commas — so joining is safe.
+			const cacheKey = `${user.id}|${[...new Set(headerRoleIds)].sort().join(",")}`;
+			let perms = headerPermsCache.get(cacheKey);
+			if (!perms) {
+				perms = deepFreeze(await getPermsFromRoleIds(headerRoleIds, event.fetch));
+				headerPermsCache.set(cacheKey, perms);
+			}
+
+			const avatarUrl = headerAvatarHash
+				? `https://cdn.discordapp.com/avatars/${headerUserId}/${headerAvatarHash}.webp?size=256`
+				: "";
+
+			event.locals.user = user;
+			event.locals.session = null;
+			event.locals.perms = perms;
+			event.locals.authSource = "header";
+			event.locals.headerProfile = {
+				username: headerUsername,
+				displayName,
+				avatarUrl,
+				roles: headerRoles,
+				roleIds: headerRoleIds
+			};
+			return resolve(event);
+		}
+	}
+
+	// Cookie/Discord session path only runs when Better Auth is configured.
+	if (!auth || !isAuthEnabled()) {
 		return resolve(event);
 	}
 
@@ -131,6 +259,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 	event.locals.user = user;
 	event.locals.session = authSession.session;
 	event.locals.perms = perms;
+	event.locals.authSource = "cookie";
 	return resolve(event);
 };
 
@@ -149,6 +278,22 @@ export const init: ServerInit = async () => {
 			crit: (message, ...args) => winstonLogger.crit(message, ...args)
 		};
 	});
+
+	// Fail fast on a header-auth secret that is present but not a non-empty
+	// string. The config is parsed from raw TOML with no schema validation, so a
+	// value like `gatewaySecret = 123` (number) or `""` would otherwise pass
+	// startup and then silently disable the runtime shared-secret check (which
+	// only enforces for non-empty strings) while looking configured.
+	const headerAuthCfg = getServerConfig().auth.headerAuth;
+	if (
+		headerAuthCfg?.enabled &&
+		Object.prototype.hasOwnProperty.call(headerAuthCfg, "gatewaySecret") &&
+		(typeof headerAuthCfg.gatewaySecret !== "string" || headerAuthCfg.gatewaySecret.length === 0)
+	) {
+		throw new Error(
+			"auth.headerAuth.gatewaySecret is set but empty or not a string; remove it or give it a non-empty string value"
+		);
+	}
 
 	if (process.env.BUILD_TARGET === "native") return;
 
