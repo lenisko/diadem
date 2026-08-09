@@ -3,6 +3,13 @@ import { readRequestBody } from "@/lib/server/api/requestBody";
 import { noStoreHttpHeaders } from "@/lib/utils/apiUtils.server";
 import { json } from "@sveltejs/kit";
 
+/**
+ * Settings carry every filter, filterset and recent search, so they need far
+ * more headroom than a map object poll. Past this a client would stop syncing
+ * with nothing to show for it, so keep it generous.
+ */
+const MAX_SETTINGS_BYTES = 2 * 1024 * 1024;
+
 export async function POST({ locals, request }) {
 	// 401, not a 200 with an error body: the client records an ok response as
 	// synced and would never resend a save that failed on an expired session.
@@ -13,7 +20,7 @@ export async function POST({ locals, request }) {
 	let settings: unknown;
 	try {
 		// keepNulls: this is stored verbatim, so a null is the user's data.
-		settings = await readRequestBody(request, { keepNulls: true });
+		settings = await readRequestBody(request, { keepNulls: true, maxBytes: MAX_SETTINGS_BYTES });
 	} catch {
 		return json({ error: "Invalid body" }, { status: 400, headers: noStoreHttpHeaders });
 	}

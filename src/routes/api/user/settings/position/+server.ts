@@ -41,7 +41,11 @@ function wrapLongitude(lng: number): number {
  * object — filters and all — for what is three numbers.
  */
 export async function POST({ locals, request }) {
-	if (!locals.user) return json({ error: "Not logged in" }, { headers: noStoreHttpHeaders });
+	// 401 rather than a 200 with an error body, matching the settings route: a
+	// caller keying off response.ok would otherwise record a rejected write.
+	if (!locals.user) {
+		return json({ error: "Not logged in" }, { status: 401, headers: noStoreHttpHeaders });
+	}
 
 	let body: PositionBody;
 	try {

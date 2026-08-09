@@ -37,7 +37,10 @@ export async function setUserMapPosition(
 	await db
 		.update(table.user)
 		.set({
-			userSettings: sql`JSON_SET(COALESCE(${table.user.userSettings}, '{}'), '$.mapPosition', CAST(${JSON.stringify(mapPosition)} AS JSON))`
+			// JSON_MERGE_PATCH, not JSON_SET with a cast: MariaDB has no JSON cast
+			// target, so CAST(... AS JSON) is a syntax error there. This form is
+			// valid on both MariaDB and MySQL, and replaces the key outright.
+			userSettings: sql`JSON_MERGE_PATCH(COALESCE(${table.user.userSettings}, '{}'), ${JSON.stringify({ mapPosition })})`
 		})
 		.where(eq(table.user.id, userId));
 }

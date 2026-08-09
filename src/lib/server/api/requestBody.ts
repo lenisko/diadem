@@ -34,6 +34,8 @@ export type ReadBodyOptions = {
 	 * dropping it silently loses a field on its way to the database.
 	 */
 	keepNulls?: boolean;
+	/** Override the byte cap, for endpoints that legitimately carry more. */
+	maxBytes?: number;
 };
 
 /**
@@ -46,20 +48,22 @@ export async function readRequestBody<T>(
 	options: ReadBodyOptions = {}
 ): Promise<T> {
 	const contentType = request.headers.get("Content-Type") ?? "";
-	const raw = await readCapped(request);
+	const raw = await readCapped(request, options.maxBytes ?? MAX_BODY_BYTES);
+	const isMsgpack = contentType.includes("application/msgpack");
 
-	if (!contentType.includes("application/msgpack")) {
-		return JSON.parse(new TextDecoder().decode(raw)) as T;
-	}
-
-	const body = decode(raw, DECODE_LIMITS);
+	const body = isMsgpack ? decode(raw, DECODE_LIMITS) : JSON.parse(new TextDecoder().decode(raw));
 
 	// msgpack has no undefined, so an absent optional field arrives as null and
 	// would defeat `!== undefined` guards such as the `since` delta cursor. Only
-	// the msgpack path needs this: in JSON an absent field is genuinely absent,
+	// the msgpack path needs that: in JSON an absent field is genuinely absent,
 	// so a null there was written deliberately.
-	if (options.keepNulls) checkDepth(body, 0);
-	else dropNulls(body, 0);
+	//
+	// Both paths are depth-checked. JSON.parse is iterative and swallows nesting
+	// that later blows the stack in stableStringify or JSON.stringify — a body
+	// well under the byte cap can carry tens of thousands of levels.
+	if (isMsgpack && !options.keepNulls) dropNulls(body, 0);
+	else checkDepth(body, 0);
+
 	return body as T;
 }
 
@@ -69,9 +73,9 @@ export async function readRequestBody<T>(
  * Content-Length is absent on a chunked body, so neither bounds anything on its
  * own. Reading the stream does, whatever the client claims.
  */
-async function readCapped(request: Request): Promise<Uint8Array> {
+async function readCapped(request: Request, maxBytes: number): Promise<Uint8Array> {
 	const declared = Number(request.headers.get("Content-Length"));
-	if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+	if (Number.isFinite(declared) && declared > maxBytes) {
 		throw new Error("Request body too large");
 	}
 
@@ -84,7 +88,7 @@ async function readCapped(request: Request): Promise<Uint8Array> {
 		const { done, value } = await reader.read();
 		if (done) break;
 		size += value.byteLength;
-		if (size > MAX_BODY_BYTES) {
+		if (size > maxBytes) {
 			await reader.cancel();
 			throw new Error("Request body too large");
 		}

@@ -116,6 +116,15 @@ export const POST: RequestHandler = async (event) => {
 	// uncacheable retries by hash forever, doubling its request rate exactly when
 	// the server is shedding load.
 	let extraHeaders: Record<string, string> | undefined;
+
+	// A hash that was sent but is malformed must still be answered with a resend.
+	// Falling through would run the query with no filter at all and return the
+	// whole viewport, which is the opposite of what the client asked for.
+	if (data.filterHash != null && !filterHash && !filter) {
+		await refund(DENIED_CHARGE);
+		return respond(request, { data: [] }, { status: constants.HTTP_STATUS_CONFLICT });
+	}
+
 	if (filterHash) {
 		if (filter) {
 			// The hash has to be the one this filter actually produces, or a client

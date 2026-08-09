@@ -223,6 +223,9 @@ const SETTINGS_SYNC_DELAY_MS = 2000;
 const SETTINGS_ENDPOINT = "/api/user/settings";
 const POSITION_ENDPOINT = "/api/user/settings/position";
 
+/** The Fetch spec rejects a keepalive request whose body exceeds this. */
+const KEEPALIVE_MAX_BYTES = 64 * 1024;
+
 let syncTimer: ReturnType<typeof setTimeout> | undefined;
 /** Something other than the map position changed, so the whole object must go. */
 let fullSyncPending = false;
@@ -312,11 +315,18 @@ function post(url: string, body: unknown, unloading: boolean, onFailure: () => v
 	// builds patch to reach the configured instance with their bearer token, so a
 	// beacon there would post to the webview origin and be lost. keepalive
 	// outlives the page the same way and still reports what happened.
+	//
+	// It is refused outright past 64 KiB though, and a settings blob can exceed
+	// that, so an oversized unload send goes as an ordinary request instead — it
+	// may be cut short, which beats being rejected for certain.
+	const size = typeof encoded.body === "string" ? encoded.body.length : encoded.body.byteLength;
+	const keepalive = unloading && size < KEEPALIVE_MAX_BYTES;
+
 	fetch(url, {
 		method: "POST",
 		body: encoded.body,
 		headers: getHeaders({ contentType: encoded.contentType }),
-		keepalive: unloading
+		keepalive
 	})
 		.then(async (response) => {
 			// The endpoint answers 200 with an error body when the session has gone,

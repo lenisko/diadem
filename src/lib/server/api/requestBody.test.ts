@@ -107,6 +107,18 @@ describe("readRequestBody", () => {
 		);
 	});
 
+	// JSON.parse is iterative and accepts nesting far past anything that later
+	// walks the result — stableStringify and JSON.stringify both recurse — so the
+	// depth bound has to apply to this path too, not just to msgpack.
+	it("rejects a deeply nested json body", async () => {
+		const request = new Request("http://localhost/api/pokemon", {
+			method: "POST",
+			body: `{"filter":${"[".repeat(5000)}${"]".repeat(5000)}}`,
+			headers: { "Content-Type": "application/json" }
+		});
+		await expect(readRequestBody(request)).rejects.toThrow(/nested too deeply/);
+	});
+
 	it("rejects a body nested past the depth limit", async () => {
 		// Below the encoder's own depth cap of 100, above the reader's limit of 64.
 		let nested: unknown = 1;
